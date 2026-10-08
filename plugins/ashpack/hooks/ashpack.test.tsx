@@ -89,8 +89,8 @@ test('helpers: names, bars, colors, git, tabs, sweep', () => {
   expect(gridWidths(grid, 2)).toEqual([22, 27, 39])
 
   // Sections: the phases with no task list, else the list itself.
-  // No task list: the latest finished steps, the running one, then empty slots; always 4.
-  expect(segments([], 'Thinking', []).map(s => `${s.title}:${s.state}`)).toEqual(['Thinking:now', ':todo', ':todo', ':todo'])
+  // No task list: the latest finished steps, then the running one.
+  expect(segments([], 'Thinking', []).map(s => `${s.title}:${s.state}`)).toEqual(['Thinking:now'])
   expect(segments([], 'Running ls', ['a', 'b', 'c', 'd']).map(s => `${s.title}:${s.state}`)).toEqual([
     'b:done',
     'c:done',
@@ -309,6 +309,17 @@ test('compact mode: a full-width popup splits the turn into the task list\'s sec
   const footer = await $.ui.mount({ plugin: 'ashpack', surface: 'terminal', ...DRAWER, props: PANE_PROPS })
   await footer.press({ key: 'compact' })
   await $.turn.start({ prompt: 'go', turnId: 't1' } as never)
+  const bandProps = { hasSurvey: false, isWorking: true, maxRows: 10, bodyColumns: 120, scroll: { offset: 0, bodyRows: 10, contentRows: 0 }, view: {} } as never
+  // No task list: the finished step, narrow, then the running one filling the row; no empty slots.
+  await $.tool.call({ tool: 'Skill', skill: 'verify' } as never)
+  const trail = await $.ui.mount({ plugin: 'ashpack', surface: 'terminal', component: 'AbovePrompt', viewport: FULL, props: bandProps })
+  const trailText = flatten(await trail.drawn())
+  expect(trailText).toContain('✓ Running /verify')
+  expect(trailText).toContain('Thinking…')
+  expect(JSON.stringify(await trail.drawn())).toContain('"width":23') // 116 / 5, the finished step
+  expect(JSON.stringify(await trail.drawn())).toContain('"width":91') // 116 - (23 + 2), the running step
+  await trail.unmount()
+
   await $.tool.call({ tool: 'TodoWrite', todos: [
     { content: 'Read the code', status: 'completed', activeForm: 'Reading' },
     { content: 'Fix the card', status: 'in_progress', activeForm: 'Fixing' },

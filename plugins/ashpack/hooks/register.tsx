@@ -2,7 +2,7 @@ import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register, RenderInput, Timer } from 'claude-code'
 
 import type { Activity, PackMod, Section, StatusData } from '../types'
-import type { Cell } from './format'
+import type { Cell, Segment } from './format'
 import {
   addTask,
   bar,
@@ -166,7 +166,14 @@ async function drawPopup($: EngineInterface, e: RenderInput<'AbovePrompt'>, a: A
   const [list, f] = await Promise.all([read($, plan), read($, frame)])
   const cols = e.props.bodyColumns
   const segs = segments(list, a?.label ?? 'Thinking', a?.trail ?? [])
-  const segWidth = Math.max(3, Math.floor((cols - 4 - SEG_GAP * (segs.length - 1)) / segs.length))
+  const inner = cols - 4 // border and padding
+  // A task list shares the row evenly. A trail keeps finished steps narrow and
+  // gives the running step the rest, so the row is always full.
+  const isTrail = list.length === 0
+  const evenWidth = Math.max(3, Math.floor((inner - SEG_GAP * (segs.length - 1)) / segs.length))
+  const doneWidth = Math.max(12, Math.floor(inner / 5))
+  const nowWidth = Math.max(3, inner - (segs.length - 1) * (doneWidth + SEG_GAP))
+  const widthOf = (s: Segment) => (!isTrail ? evenWidth : s.state === 'now' ? nowWidth : doneWidth)
   const done = list.filter(s => s.status === 'completed').length
   const facts = [
     list.length > 0 ? `${done}/${list.length}` : '',
@@ -180,21 +187,24 @@ async function drawPopup($: EngineInterface, e: RenderInput<'AbovePrompt'>, a: A
           <Text bold color={ACCENT}>
             ◆ AshPack
           </Text>
-          <Text> {a?.label ?? 'Working'}…</Text>
+          {/* The trail's running section names the step; a task list's sections are the tasks. */}
+          {isTrail ? null : <Text> {a?.label ?? 'Working'}…</Text>}
         </Text>
         <Text dimColor>{facts.join(' · ')}</Text>
       </Box>
       <Box columnGap={SEG_GAP}>
         {segs.map((s, i) => {
+          const width = widthOf(s)
           const color = s.state === 'now' ? BLUE : s.state === 'done' ? COLORS.ok : undefined
           return (
-            <Box key={`seg-${i}`} flexDirection="column" width={segWidth}>
+            <Box key={`seg-${i}`} flexDirection="column" width={width}>
               <Text wrap="truncate-end" bold={s.state === 'now'} color={s.state === 'now' ? ACCENT : color} dimColor={s.state === 'todo'}>
                 {s.state === 'done' ? '✓ ' : ''}
                 {s.title}
+                {s.state === 'now' && isTrail ? '…' : ''}
               </Text>
               <Text color={color} dimColor={s.state === 'todo'}>
-                {s.state === 'now' ? sweep(f, segWidth, Math.max(2, Math.floor(segWidth / 4))) : bar(s.state === 'done' ? 100 : 0, segWidth)}
+                {s.state === 'now' ? sweep(f, width, Math.max(2, Math.min(12, Math.floor(width / 6)))) : bar(s.state === 'done' ? 100 : 0, width)}
               </Text>
             </Box>
           )

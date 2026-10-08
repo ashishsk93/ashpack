@@ -149,18 +149,16 @@ export const sweep = (frame: number, width: number, block: number): string => {
 
 // ── the working popup: sections ──
 
-// Finished steps the popup keeps beside the running one: with it, the sections' count.
+// Finished steps the popup keeps before the running one.
 export const TRAIL = 3
 
 export type Segment = { title: string; state: 'done' | 'now' | 'todo' }
 
 // The popup's sections: the model's task list when it keeps one; else the turn's
-// latest finished steps, the running one, and empty slots up to the same count.
+// latest finished steps, then the running one.
 export const segments = (plan: readonly Section[], label: string, trail: readonly string[]): Segment[] => {
   if (plan.length === 0) {
-    const done: Segment[] = trail.slice(-TRAIL).map(title => ({ title, state: 'done' }))
-    const slots: Segment[] = Array.from({ length: TRAIL - done.length }, () => ({ title: '', state: 'todo' }))
-    return [...done, { title: label, state: 'now' }, ...slots]
+    return [...trail.slice(-TRAIL).map(title => ({ title, state: 'done' }) as const), { title: label, state: 'now' }]
   }
   const running = plan.findIndex(s => s.status === 'in_progress')
   const at = running >= 0 ? running : plan.findIndex(s => s.status === 'pending')
@@ -218,6 +216,8 @@ export const describeTool = (tool: string, input: unknown): string => {
     case 'Grep':
     case 'Glob':
       return `Searching ${clip(str('pattern'))}`
+    case 'Skill':
+      return `Running /${clip(str('skill'))}`
     case 'Agent':
     case 'Task':
       return `Delegating ${clip(str('description'))}`
