@@ -1,0 +1,218 @@
+import type { GitInfo, RateWindow, Section, StatusData } from '../types'
+
+// Pure helpers, kept apart from the hooks so the tests can call them directly.
+
+const MODES: Record<string, string> = {
+  auto: '⏵⏵ auto',
+  plan: '⏸ plan',
+  acceptEdits: '⏵⏵ accept edits',
+  bypassPermissions: '⚠ bypass',
+  dontAsk: "don't ask",
+  default: '',
+}
+
+const WINDOWS: Record<string, string> = { five_hour: 'session', seven_day: 'week' }
+
+const EFFORT: Record<string, string> = { low: '◔', medium: '◑', high: '◕', xhigh: '●', max: '●' }
+
+export const COLORS = { ok: '#c3e88d', warn: '#ffcb6b', hot: '#f07178', accent: '#c792ea', blue: '#82aaff' } as const
+
+// "claude-opus-5-5[1m]" -> "Opus 5.5 1M"; "opus[1m]" -> "Opus 1M"
+export const prettyModel = (id: string): string => {
+  const ctx = /\[(\w+)\]/.exec(id)?.[1]?.toUpperCase()
+  const base = id.replace(/\[.*\]/, '').replace(/^claude-/, '').replace(/-\d{8}$/, '')
+  const [family = base, ...rest] = base.split('-')
+  const name = family.charAt(0).toUpperCase() + family.slice(1)
+  const version = rest.length > 0 ? ` ${rest.join('.')}` : ''
+  return `${name}${version}${ctx ? ` ${ctx}` : ''}`
+}
+
+// ms -> "3d4h", "2h14m", "9m"
+export const shortDuration = (ms: number): string => {
+  const mins = Math.max(0, Math.round(ms / 60000))
+  const d = Math.floor(mins / 1440)
+  const h = Math.floor((mins % 1440) / 60)
+  const m = mins % 60
+  if (d > 0) return `${d}d${h}h`
+  if (h > 0) return `${h}h${m}m`
+  return `${m}m`
+}
+
+// five_hour -> session, seven_day -> week, seven_day_fable -> fable
+export const windowLabel = (kind: string): string =>
+  WINDOWS[kind] ?? kind.replace(/^seven_day_/, '').replace(/_/g, ' ')
+
+export const modeLabel = (mode: string): string => MODES[mode] ?? mode
+
+export const effortLabel = (level: string): string => `${EFFORT[level] ?? '○'} ${level}`
+
+export const levelColor = (percent: number): string =>
+  percent >= 85 ? COLORS.hot : percent >= 60 ? COLORS.warn : COLORS.ok
+
+// A filled bar: 42% over 8 cells -> "▰▰▰▱▱▱▱▱"
+export const bar = (percent: number, width: number): string => {
+  const lit = Math.min(width, Math.max(0, Math.round((percent / 100) * width)))
+  return '▰'.repeat(lit) + '▱'.repeat(width - lit)
+}
+
+export const money = (usd: number): string => (usd >= 100 ? `$${Math.round(usd)}` : `$${usd.toFixed(2)}`)
+
+// `git status --porcelain=v2 --branch` -> branch, changed files, ahead/behind.
+export const parseGit = (porcelain: string): GitInfo | null => {
+  const lines = porcelain.split('\n').filter(Boolean)
+  const head = lines.find(l => l.startsWith('# branch.head '))?.slice(14)
+  if (!head) return null
+  const ab = /^# branch\.ab \+(\d+) -(\d+)/m.exec(porcelain)
+  return {
+    branch: head === '(detached)' ? 'detached' : head,
+    dirty: lines.filter(l => !l.startsWith('#')).length,
+    ahead: Number(ab?.[1] ?? 0),
+    behind: Number(ab?.[2] ?? 0),
+  }
+}
+
+// The tab `delta` steps from `current`, wrapping at either end.
+export const stepTab = (names: readonly string[], current: string, delta: number): string => {
+  const at = Math.max(0, names.indexOf(current))
+  return names[(at + delta + names.length) % names.length] ?? current
+}
+
+// ── the status grid: 2 rows x 3 sections, as styled spans ──
+
+export type Span = { text: string; color?: string; dim?: boolean; bold?: boolean }
+export type Cell = Span[]
+
+const meter = (label: string, percent: number, width: number): Cell => [
+  { text: `${label} `, dim: true },
+  { text: `${bar(percent, width)} ${Math.round(percent)}%`, color: levelColor(percent) },
+]
+
+const resetIn = (r: RateWindow, now: number): Span[] => {
+  const at = r.resetsAt ? Date.parse(r.resetsAt) : NaN
+  return Number.isNaN(at) ? [] : [{ text: ` ↻${shortDuration(at - now)}`, dim: true }]
+}
+
+// Columns:   who            where                spend
+// row 1:     model effort   ⎇ branch ●n ↑n ↓n    folder · $cost · time
+// row 2:     ctx bar        session bar ↻reset   week bar + per-model bars ↻reset
+export const statusGrid = (d: StatusData, now: number, barWidth: number): Cell[][] => {
+  const session = d.rateLimits.find(r => r.kind === 'five_hour')
+  const weekly = d.rateLimits.filter(r => r.kind !== 'five_hour')
+  const resets = new Set(weekly.map(r => r.resetsAt))
+  const git: Cell = d.git
+    ? [
+        { text: `⎇ ${d.git.branch}`, color: COLORS.ok },
+        ...(d.git.dirty > 0 ? [{ text: ` ●${d.git.dirty}`, color: COLORS.warn }] : []),
+        ...(d.git.ahead > 0 ? [{ text: ` ↑${d.git.ahead}`, color: COLORS.blue }] : []),
+        ...(d.git.behind > 0 ? [{ text: ` ↓${d.git.behind}`, color: COLORS.hot }] : []),
+      ]
+    : [{ text: '⎇ no repo', dim: true }]
+  const spend: Cell = [
+    { text: d.folder },
+    { text: `${d.costUsd !== undefined ? ` · ${money(d.costUsd)}` : ''} · ${shortDuration(now - d.startedAt)}`, dim: true },
+  ]
+  // Weekly windows usually share one reset: say it once, at the end.
+  const weeklyCell: Cell = weekly.flatMap((r, i) => [
+    ...(i > 0 ? [{ text: '  ' }] : []),
+    ...meter(windowLabel(r.kind), r.percentUsed, barWidth),
+    ...(resets.size > 1 ? resetIn(r, now) : []),
+  ])
+  const lastWeekly = weekly.at(-1)
+  return [
+    [
+      [{ text: `◆ ${prettyModel(d.model)}`, color: COLORS.accent, bold: true }, ...(d.effort ? [{ text: ` ${effortLabel(d.effort)}`, color: COLORS.blue }] : [])],
+      git,
+      spend,
+    ],
+    [
+      meter('ctx', d.contextPercent ?? 0, barWidth),
+      session ? [...meter('session', session.percentUsed, barWidth), ...resetIn(session, now)] : [{ text: 'session —', dim: true }],
+      weekly.length > 0 ? [...weeklyCell, ...(resets.size === 1 && lastWeekly ? resetIn(lastWeekly, now) : [])] : [{ text: 'week —', dim: true }],
+    ],
+  ]
+}
+
+const cellWidth = (cell: Cell): number => cell.reduce((n, sp) => n + [...sp.text].length, 0)
+
+// Each section as wide as its widest cell, plus the separator ("│ ") and `gap`: no wider.
+export const gridWidths = (grid: Cell[][], gap: number): number[] =>
+  (grid[0] ?? []).map((_, c) => Math.max(...grid.map(row => cellWidth(row[c] ?? []))) + gap + (c > 0 ? 2 : 0))
+
+export const gridBarWidth = (total: number): number => (total >= 140 ? 8 : total >= 100 ? 6 : 4)
+
+// An indeterminate bar: a block of `block` cells sliding right to left across `width`.
+export const sweep = (frame: number, width: number, block: number): string => {
+  const span = width + block
+  const head = width - 1 - (frame % span) + block // rightmost lit cell, moving left
+  return Array.from({ length: width }, (_, i) => (i <= head && i > head - block ? '▰' : '▱')).join('')
+}
+
+// ── the working popup: sections ──
+
+// With no task list, the popup splits the turn into these phases.
+export const PHASES = ['Think', 'Explore', 'Edit', 'Run'] as const
+
+const EXPLORE = new Set(['Read', 'Grep', 'Glob', 'LSP', 'WebFetch', 'WebSearch', 'Agent', 'Task'])
+const EDIT = new Set(['Edit', 'Write', 'NotebookEdit'])
+const THINK = new Set(['TodoWrite', 'TaskCreate', 'TaskUpdate', 'TaskList', 'TaskGet', 'ToolSearch', 'Skill'])
+
+export const phaseOf = (tool: string): string =>
+  EXPLORE.has(tool) ? 'Explore' : EDIT.has(tool) ? 'Edit' : THINK.has(tool) ? 'Think' : 'Run'
+
+export type Segment = { title: string; state: 'done' | 'now' | 'todo' }
+
+// The popup's sections: the model's task list when it keeps one, else the phases.
+export const segments = (plan: readonly Section[], phase: string, visited: readonly string[]): Segment[] => {
+  if (plan.length === 0) {
+    return PHASES.map(p => ({ title: p, state: p === phase ? 'now' : visited.includes(p) ? 'done' : 'todo' }))
+  }
+  const running = plan.findIndex(s => s.status === 'in_progress')
+  const at = running >= 0 ? running : plan.findIndex(s => s.status === 'pending')
+  return plan.map((s, i) => ({ title: s.title, state: s.status === 'completed' ? 'done' : i === at ? 'now' : 'todo' }))
+}
+
+const STATUSES = new Set<string>(['pending', 'in_progress', 'completed'])
+const asStatus = (v: unknown): Section['status'] | undefined =>
+  typeof v === 'string' && STATUSES.has(v) ? (v as Section['status']) : undefined
+
+export const planFromTodos = (todos: readonly { content: string; status: string }[]): Section[] =>
+  todos.map((t, i) => ({ id: String(i), title: t.content, status: asStatus(t.status) ?? 'pending' }))
+
+export const addTask = (plan: readonly Section[], id: string, title: string): Section[] => [
+  ...plan,
+  { id, title, status: 'pending' },
+]
+
+export const updateTask = (plan: readonly Section[], u: { taskId: string; subject?: string; status?: string }): Section[] =>
+  u.status === 'deleted'
+    ? plan.filter(s => s.id !== u.taskId)
+    : plan.map(s => (s.id === u.taskId ? { ...s, title: u.subject ?? s.title, status: asStatus(u.status) ?? s.status } : s))
+
+// A short line for what a tool call is doing.
+export const describeTool = (tool: string, input: unknown): string => {
+  const i = (input ?? {}) as Record<string, unknown>
+  const str = (k: string) => (typeof i[k] === 'string' ? (i[k] as string) : '')
+  const base = (p: string) => p.split('/').pop() ?? p
+  const clip = (s: string) => (s.length > 40 ? `${s.slice(0, 39)}…` : s)
+  switch (tool) {
+    case 'Bash':
+      return `Running ${clip(str('description') || str('command'))}`
+    case 'Read':
+      return `Reading ${base(str('file_path'))}`
+    case 'Edit':
+    case 'Write':
+    case 'NotebookEdit':
+      return `Editing ${base(str('file_path') || str('notebook_path'))}`
+    case 'Grep':
+    case 'Glob':
+      return `Searching ${clip(str('pattern'))}`
+    case 'Agent':
+    case 'Task':
+      return `Delegating ${clip(str('description'))}`
+    case 'WebFetch':
+    case 'WebSearch':
+      return 'Browsing the web'
+    default:
+      return `Using ${tool.replace(/^mcp__/, '').replace(/__/g, ' ')}`
+  }
+}

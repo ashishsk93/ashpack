@@ -1,0 +1,14 @@
+{
+  "name": "ashpack",
+  "description": "Ashish's Claude Code mods.",
+  "owner": {
+    "name": "Ashish S Kumar"
+  },
+  "plugins": [
+    {
+      "name": "ashpack",
+      "source": "./plugins/ashpack",
+      "description": "Status line, compact mode and the AshPack menu."
+    }
+  ]
+}

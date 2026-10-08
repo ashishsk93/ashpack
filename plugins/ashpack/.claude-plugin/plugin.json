@@ -1,0 +1,7 @@
+{
+  "name": "ashpack",
+  "version": "0.5.0",
+  "description": "AshPack: colored status rows, compact mode with a working popup, and a footer drawer that holds other mods.",
+  "author": { "name": "Ashish S Kumar" },
+  "types": "./types/index.d.ts"
+}

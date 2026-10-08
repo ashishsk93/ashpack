@@ -1,0 +1,4 @@
+.DS_Store
+# Laid by Claude Code when it loads a mod from a folder; regenerated, never edited.
+plugins/*/.claude-plugin/types/
+node_modules/
