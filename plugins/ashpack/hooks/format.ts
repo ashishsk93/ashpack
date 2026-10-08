@@ -1,4 +1,4 @@
-import type { GitInfo, RateWindow, Section, StatusData } from '../types'
+import type { GitInfo, PackMod, RateWindow, Section, StatusData } from '../types'
 
 // Pure helpers, kept apart from the hooks so the tests can call them directly.
 
@@ -149,22 +149,18 @@ export const sweep = (frame: number, width: number, block: number): string => {
 
 // ── the working popup: sections ──
 
-// With no task list, the popup splits the turn into these phases.
-export const PHASES = ['Think', 'Explore', 'Edit', 'Run'] as const
-
-const EXPLORE = new Set(['Read', 'Grep', 'Glob', 'LSP', 'WebFetch', 'WebSearch', 'Agent', 'Task'])
-const EDIT = new Set(['Edit', 'Write', 'NotebookEdit'])
-const THINK = new Set(['TodoWrite', 'TaskCreate', 'TaskUpdate', 'TaskList', 'TaskGet', 'ToolSearch', 'Skill'])
-
-export const phaseOf = (tool: string): string =>
-  EXPLORE.has(tool) ? 'Explore' : EDIT.has(tool) ? 'Edit' : THINK.has(tool) ? 'Think' : 'Run'
+// Finished steps the popup keeps beside the running one: with it, the sections' count.
+export const TRAIL = 3
 
 export type Segment = { title: string; state: 'done' | 'now' | 'todo' }
 
-// The popup's sections: the model's task list when it keeps one, else the phases.
-export const segments = (plan: readonly Section[], phase: string, visited: readonly string[]): Segment[] => {
+// The popup's sections: the model's task list when it keeps one; else the turn's
+// latest finished steps, the running one, and empty slots up to the same count.
+export const segments = (plan: readonly Section[], label: string, trail: readonly string[]): Segment[] => {
   if (plan.length === 0) {
-    return PHASES.map(p => ({ title: p, state: p === phase ? 'now' : visited.includes(p) ? 'done' : 'todo' }))
+    const done: Segment[] = trail.slice(-TRAIL).map(title => ({ title, state: 'done' }))
+    const slots: Segment[] = Array.from({ length: TRAIL - done.length }, () => ({ title: '', state: 'todo' }))
+    return [...done, { title: label, state: 'now' }, ...slots]
   }
   const running = plan.findIndex(s => s.status === 'in_progress')
   const at = running >= 0 ? running : plan.findIndex(s => s.status === 'pending')
@@ -187,6 +183,22 @@ export const updateTask = (plan: readonly Section[], u: { taskId: string; subjec
   u.status === 'deleted'
     ? plan.filter(s => s.id !== u.taskId)
     : plan.map(s => (s.id === u.taskId ? { ...s, title: u.subject ?? s.title, status: asStatus(u.status) ?? s.status } : s))
+
+// The pack's mods (its marketplace's plugins), each installed and on, installed and off, or not installed.
+export const packMods = (
+  catalogJson: string,
+  installedJson: string,
+  enabled: Readonly<Record<string, unknown>>,
+  market: string,
+): PackMod[] => {
+  const catalog = JSON.parse(catalogJson) as { plugins?: { name?: unknown }[] }
+  const installed = (JSON.parse(installedJson) as { plugins?: Record<string, unknown[]> }).plugins ?? {}
+  return (catalog.plugins ?? []).flatMap(p => {
+    if (typeof p.name !== 'string') return []
+    const id = `${p.name}@${market}`
+    return [{ name: p.name, state: !installed[id]?.length ? 'missing' : enabled[id] === true ? 'on' : 'off' } as const]
+  })
+}
 
 // A short line for what a tool call is doing.
 export const describeTool = (tool: string, input: unknown): string => {

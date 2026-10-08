@@ -8,7 +8,7 @@ import {
   gridWidths,
   levelColor,
   parseGit,
-  phaseOf,
+  packMods,
   planFromTodos,
   prettyModel,
   segments,
@@ -89,10 +89,14 @@ test('helpers: names, bars, colors, git, tabs, sweep', () => {
   expect(gridWidths(grid, 2)).toEqual([22, 27, 39])
 
   // Sections: the phases with no task list, else the list itself.
-  expect(phaseOf('Grep')).toBe('Explore')
-  expect(phaseOf('Edit')).toBe('Edit')
-  expect(phaseOf('Bash')).toBe('Run')
-  expect(segments([], 'Edit', ['Think', 'Explore']).map(s => s.state)).toEqual(['done', 'done', 'now', 'todo'])
+  // No task list: the latest finished steps, the running one, then empty slots; always 4.
+  expect(segments([], 'Thinking', []).map(s => `${s.title}:${s.state}`)).toEqual(['Thinking:now', ':todo', ':todo', ':todo'])
+  expect(segments([], 'Running ls', ['a', 'b', 'c', 'd']).map(s => `${s.title}:${s.state}`)).toEqual([
+    'b:done',
+    'c:done',
+    'd:done',
+    'Running ls:now',
+  ])
   const todos = planFromTodos([
     { content: 'Read', status: 'completed' },
     { content: 'Fix', status: 'in_progress' },
@@ -102,6 +106,14 @@ test('helpers: names, bars, colors, git, tabs, sweep', () => {
   const tasks = updateTask(addTask(addTask([], '1', 'One'), '2', 'Two'), { taskId: '1', status: 'completed' })
   expect(segments(tasks, 'Think', []).map(s => s.state)).toEqual(['done', 'now'])
   expect(updateTask(tasks, { taskId: '2', status: 'deleted' }).map(s => s.id)).toEqual(['1'])
+
+  const pack = packMods(
+    JSON.stringify({ plugins: [{ name: 'ashpack' }, { name: 'hello' }, { name: 'later' }] }),
+    JSON.stringify({ plugins: { 'ashpack@ashpack': [{}], 'hello@ashpack': [{}], 'baton@baton-mods': [{}] } }),
+    { 'ashpack@ashpack': true, 'hello@ashpack': false },
+    'ashpack',
+  )
+  expect(pack.map(m => `${m.name}:${m.state}`)).toEqual(['ashpack:on', 'hello:off', 'later:missing'])
 
   // The lit block enters at the right edge and leaves at the left.
   expect(sweep(0, 6, 2)).toBe('▱▱▱▱▱▱')
@@ -143,6 +155,18 @@ test('the footer drawer folds other mods into tabs of a floating card', async ($
   on('ui.open', ($, e) => (opened.push(e.id), { value: { isPlaced: true } }))
   on('ui.close', () => ({ value: undefined }))
   on('ui.log', () => ({ value: undefined }))
+  on('ui.toast', () => ({ value: undefined }))
+  const files: Record<string, string> = {
+    '/nowhere/.claude/plugins/known_marketplaces.json': JSON.stringify({ ashpack: { installLocation: '/pack' } }),
+    '/nowhere/.claude/plugins/installed_plugins.json': JSON.stringify({ plugins: { 'ashpack@ashpack': [{}], 'hello@ashpack': [{}] } }),
+    '/pack/.claude-plugin/marketplace.json': JSON.stringify({ plugins: [{ name: 'ashpack' }, { name: 'hello' }] }),
+  }
+  on('fs.read', ($, e) => ({ value: files[e.path] ?? '' }))
+  on('settings.read', () => ({ value: { enabledPlugins: { 'ashpack@ashpack': true, 'hello@ashpack': false } } }))
+  const ran: string[] = []
+  on('process.run', ($, e) => (ran.push(e.argv.join(' ')), { value: { exitCode: 0, stdout: '', stderr: '' } }) as never)
+  const filled: string[] = []
+  on('prompt.fill', ($, e) => (filled.push(e.text), { isFilled: true }) as never)
   // Stands in for baton: a hook beneath ashpack that draws its own footer badge.
   on('ui.render', { component: 'SessionMode' }, ($, e) => {
     const { Text } = $.ui.resolve(e)
@@ -166,7 +190,17 @@ test('the footer drawer folds other mods into tabs of a floating card', async ($
     expect((await footer.find({ key: 'compact' }))?.text).toContain('ON')
     await footer.press({ key: 'compact' })
 
-    // The arrow moves to the stand-in's tab: its badge, drawn by it, and not ours.
+    // Mods tab: the pack's mods; a press turns one on and hands over /reload-plugins.
+    await footer.press({ key: 'tab-next' })
+    expect(await footer.find({ text: /◆ ashpack/ })).toBeDefined()
+    expect((await footer.find({ key: 'mod-hello' }))?.text).toContain('○ hello')
+    await footer.press({ key: 'mod-hello' })
+    expect(ran.at(-1)).toBe('claude plugin enable hello@ashpack')
+    expect(filled.at(-1)).toBe('/reload-plugins')
+    await footer.press({ key: 'mods-update' })
+    expect(ran.slice(-3)).toEqual(['claude plugin marketplace update ashpack', 'claude plugin update ashpack@ashpack', 'claude plugin update hello@ashpack'])
+
+    // The arrow moves on to the stand-in's tab: its badge, drawn by it, and not ours.
     await footer.press({ key: 'tab-next' })
     expect(await footer.find({ text: /baton-badge/ })).toBeDefined()
     expect(await footer.find({ key: 'compact' })).toBeUndefined()

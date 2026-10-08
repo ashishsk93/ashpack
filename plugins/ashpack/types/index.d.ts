@@ -1,5 +1,8 @@
-// What the turn is doing: the latest tool's line, and the phases it went through.
-export type Activity = { startedAt: number; label: string; steps: number; phase: string; visited: string[] }
+// What the turn is doing: the running step's line, and the lines of the steps it finished.
+export type Activity = { startedAt: number; label: string; steps: number; trail: string[] }
+
+// One of the pack's mods, as the card's Mods tab lists it.
+export type PackMod = { name: string; state: 'on' | 'off' | 'missing' }
 
 // One item of the model's task list (TodoWrite, or TaskCreate/TaskUpdate).
 export type Section = { id: string; title: string; status: 'pending' | 'in_progress' | 'completed' }
@@ -31,6 +34,8 @@ declare module 'claude-code' {
       drawerOpen: boolean
       tab: string
       plan: Section[]
+      pack: PackMod[]
+      packBusy: string | null
     }
   }
 }

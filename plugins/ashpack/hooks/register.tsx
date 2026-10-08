@@ -1,7 +1,7 @@
 import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register, RenderInput, Timer } from 'claude-code'
 
-import type { Activity, Section, StatusData } from '../types'
+import type { Activity, PackMod, Section, StatusData } from '../types'
 import type { Cell } from './format'
 import {
   addTask,
@@ -11,12 +11,13 @@ import {
   gridBarWidth,
   gridWidths,
   parseGit,
-  phaseOf,
+  packMods,
   planFromTodos,
   segments,
   statusGrid,
   stepTab,
   sweep,
+  TRAIL,
   updateTask,
 } from './format'
 
@@ -41,6 +42,9 @@ const ACCENT = COLORS.accent
 const BLUE = COLORS.blue
 const CARD_WIDTH = 46
 const HOME_TAB = 'AshPack'
+const MODS_TAB = 'Mods'
+const PACK = 'ashpack' // the marketplace the pack's mods come from
+const CLI_TIMEOUT_MS = 120_000
 const CARD_BG = '#1e1e2e'
 const COMPACT_KEY = 'compact' // $.store keys: toggles survive sessions
 const STATUS_KEY = 'statusOn'
@@ -53,6 +57,8 @@ const status = atom({ plugin: 'ashpack', key: 'status' } as const, null as Statu
 const drawerOpen = atom({ plugin: 'ashpack', key: 'drawerOpen' } as const, false)
 const tab = atom({ plugin: 'ashpack', key: 'tab' } as const, HOME_TAB)
 const plan = atom({ plugin: 'ashpack', key: 'plan' } as const, [] as Section[])
+const pack = atom({ plugin: 'ashpack', key: 'pack' } as const, [] as PackMod[])
+const packBusy = atom({ plugin: 'ashpack', key: 'packBusy' } as const, null as string | null)
 
 // ── status rows: data ────────────────────────────────────────────────────────
 
@@ -159,7 +165,7 @@ async function drawPopup($: EngineInterface, e: RenderInput<'AbovePrompt'>, a: A
   const { Box, Text } = $.ui.resolve(e)
   const [list, f] = await Promise.all([read($, plan), read($, frame)])
   const cols = e.props.bodyColumns
-  const segs = segments(list, a?.phase ?? 'Think', a?.visited ?? [])
+  const segs = segments(list, a?.label ?? 'Thinking', a?.trail ?? [])
   const segWidth = Math.max(3, Math.floor((cols - 4 - SEG_GAP * (segs.length - 1)) / segs.length))
   const done = list.filter(s => s.status === 'completed').length
   const facts = [
@@ -200,9 +206,55 @@ async function drawPopup($: EngineInterface, e: RenderInput<'AbovePrompt'>, a: A
 
 // ── drawer ───────────────────────────────────────────────────────────────────
 
+// The pack's mods: its marketplace's catalog, against what is installed and on.
+async function loadPack($: EngineInterface): Promise<void> {
+  try {
+    const home = await $.env.get('HOME')
+    const [known, installed, settings] = await Promise.all([
+      $.fs.read(`${home}/.claude/plugins/known_marketplaces.json`),
+      $.fs.read(`${home}/.claude/plugins/installed_plugins.json`),
+      $.settings.read(),
+    ])
+    const where = (JSON.parse(known) as Record<string, { installLocation?: string }>)[PACK]?.installLocation
+    if (!where) throw new Error(`marketplace "${PACK}" is not added`)
+    const catalog = await $.fs.read(`${where}/.claude-plugin/marketplace.json`)
+    const enabled = (settings.enabledPlugins ?? {}) as Record<string, unknown>
+    await update($, pack, () => packMods(catalog, installed, enabled, PACK))
+  } catch (err) {
+    $.ui.log(`ashpack mods: ${String(err)}`, { to: 'debug' })
+    await update($, pack, () => [])
+  }
+}
+
+// A mod's button: on -> disable, off -> enable, missing -> install; null updates the pack.
+// A mod cannot reload plugins, so the prompt box is handed "/reload-plugins" to send.
+async function packAction($: EngineInterface, mod: PackMod | null): Promise<void> {
+  if ((await read($, packBusy)) !== null) return
+  const installed = (await read($, pack)).filter(m => m.state !== 'missing')
+  const runs: string[][] = mod
+    ? [['claude', 'plugin', mod.state === 'on' ? 'disable' : mod.state === 'off' ? 'enable' : 'install', `${mod.name}@${PACK}`]]
+    : [['claude', 'plugin', 'marketplace', 'update', PACK], ...installed.map(m => ['claude', 'plugin', 'update', `${m.name}@${PACK}`])]
+  await update($, packBusy, () => mod?.name ?? 'update')
+  try {
+    for (const argv of runs) {
+      const { exitCode, stdout, stderr } = await $.process.run(argv, { timeoutMs: CLI_TIMEOUT_MS })
+      if (exitCode !== 0) throw new Error((stderr || stdout).trim().split('\n')[0] || `${argv.join(' ')} failed`)
+    }
+    const done = mod ? `${mod.name} ${mod.state === 'on' ? 'off' : mod.state === 'off' ? 'on' : 'installed'}` : 'Pack updated'
+    $.ui.toast(`AshPack: ${done}. Press Enter to reload plugins.`)
+    await $.prompt.fill({ text: '/reload-plugins' })
+  } catch (err) {
+    $.ui.toast(`AshPack: ${err instanceof Error ? err.message : String(err)}`)
+  } finally {
+    await update($, packBusy, () => null)
+    await loadPack($)
+  }
+}
+
 // Fullscreen: the footer draws a card over the transcript. Elsewhere a card
 // would be clipped to the footer's one row, so a small pane opens instead.
 async function openDrawer($: EngineInterface, isFullscreen: boolean): Promise<void> {
+  await loadPack($)
   await update($, drawerOpen, () => true)
   if (!isFullscreen) {
     await $.ui.open({ id: DRAWER, title: 'AshPack', focus: true, closeOnEscape: true, holdToasts: true, rows: 5, columns: 40 })
@@ -261,7 +313,7 @@ export const register: Register = on => {
 
   on('turn.start', async ($, e, next) => {
     const now = await $.clock.now()
-    await update($, activity, () => ({ startedAt: now, label: 'Thinking', steps: 0, phase: 'Think', visited: [] }))
+    await update($, activity, () => ({ startedAt: now, label: 'Thinking', steps: 0, trail: [] }))
     // A finished task list is the last turn's; a new one starts empty.
     await update($, plan, p => (p.every(s => s.status === 'completed') ? [] : p))
     stopTicker()
@@ -290,10 +342,8 @@ export const register: Register = on => {
 
   // ── compact mode: what the popup says, and the task list it splits into sections ──
   on('tool.call', async ($, e, next) => {
-    const tool = String(e.tool)
-    const enter = (phase: string) => (a: Activity | null) =>
-      a && { ...a, phase, visited: a.visited.includes(a.phase) ? a.visited : [...a.visited, a.phase] }
-    await update($, activity, a => enter(phaseOf(tool))(a && { ...a, label: describeTool(tool, e), steps: a.steps + 1 }))
+    const label = describeTool(String(e.tool), e)
+    await update($, activity, a => a && { ...a, label, steps: a.steps + 1 })
     const isMain = !e.agentId // a subagent's list is its own
     if (isMain && e.tool === 'TodoWrite') await update($, plan, () => planFromTodos(e.todos))
     if (isMain && e.tool === 'TaskUpdate') await update($, plan, p => updateTask(p, e))
@@ -302,7 +352,8 @@ export const register: Register = on => {
       const id = (result.result as { task?: { id?: unknown } } | undefined)?.task?.id
       if (typeof id === 'string') await update($, plan, p => addTask(p, id, e.subject))
     }
-    await update($, activity, a => enter('Think')(a && { ...a, label: 'Thinking' }))
+    // The step joins the trail; the line goes back to thinking unless another call took it.
+    await update($, activity, a => a && { ...a, label: a.label === label ? 'Thinking' : a.label, trail: [...a.trail, label].slice(-TRAIL) })
     return result
   }).catch(($, e, next) => next(e))
 
@@ -388,11 +439,13 @@ export const register: Register = on => {
   // ── footer: the drawer. Closed: "◆ AshPack ▸". Open: "◂" and a card with a tab per footer mod. ──
   on('ui.render', { component: 'SessionMode' }, async ($, e, next) => {
     const isFullscreen = e.viewport?.isFullscreen === true
-    const [isOpen, isCompactOn, isStatusOn, picked] = await Promise.all([
+    const [isOpen, isCompactOn, isStatusOn, picked, mods, busy] = await Promise.all([
       read($, drawerOpen),
       read($, compact),
       read($, statusOn),
       read($, tab),
+      read($, pack),
+      read($, packBusy),
     ])
     const { Box, Button, Text } = $.ui.resolve(e)
     const modes = e.props.modes.length > 0 ? <Text dimColor>{e.props.modes.join(' & ')}</Text> : null
@@ -428,7 +481,11 @@ export const register: Register = on => {
     }
     // A tab per mod that drew something of its own; one that passed next's tree on draws nothing.
     const drawn = next.trace.filter(t => t.plugin !== 'engine' && t.outcome !== 'passed' && t.returned != null)
-    const tabs = [{ name: HOME_TAB, tree: null }, ...drawn.map(t => ({ name: t.plugin, tree: t.returned ?? null }))]
+    const tabs = [
+      { name: HOME_TAB, tree: null },
+      { name: MODS_TAB, tree: null },
+      ...drawn.map(t => ({ name: t.plugin, tree: t.returned ?? null })),
+    ]
     const names = tabs.map(t => t.name)
     const active = tabs.find(t => t.name === picked) ?? { name: HOME_TAB, tree: null }
     const go = (delta: number) => () => update($, tab, () => stepTab(names, active.name, delta))
@@ -438,12 +495,35 @@ export const register: Register = on => {
         <Button key={key} plain label={isOn ? '● ON ' : '○ OFF'} onPress={onPress} />
       </Box>
     )
-    const body = active.tree ?? (
-      <Box columnGap={3}>
-        {toggle1('compact', 'Compact', isCompactOn, () => toggle($, 'compact'))}
-        {toggle1('status', 'Status rows', isStatusOn, () => toggle($, 'statusOn'))}
-      </Box>
-    )
+    const mark = (m: PackMod) => (busy === m.name ? '…' : m.state === 'on' ? '●' : m.state === 'off' ? '○' : '+')
+    // ponytail: one row of mods; past ~5 they need paging (the card has one row to give)
+    const modsRow =
+      mods.length === 0 ? (
+        <Text dimColor>No "{PACK}" marketplace found</Text>
+      ) : (
+        <Box columnGap={2}>
+          {mods.map(m =>
+            m.name === PACK ? (
+              <Text key={`mod-${m.name}`} color={ACCENT}>
+                ◆ {m.name}
+              </Text>
+            ) : (
+              <Button key={`mod-${m.name}`} plain dimColor={m.state !== 'on'} label={`${mark(m)} ${m.name}`} onPress={() => packAction($, m)} />
+            ),
+          )}
+          <Button key="mods-update" plain dimColor label={busy === 'update' ? '… update' : '↻ update'} onPress={() => packAction($, null)} />
+        </Box>
+      )
+    const body =
+      active.tree ??
+      (active.name === MODS_TAB ? (
+        modsRow
+      ) : (
+        <Box columnGap={3}>
+          {toggle1('compact', 'Compact', isCompactOn, () => toggle($, 'compact'))}
+          {toggle1('status', 'Status rows', isStatusOn, () => toggle($, 'statusOn'))}
+        </Box>
+      ))
     // Four rows: it floats over the prompt box and the row above it, and is cut at that region's top.
     const card = (
       <Box
@@ -477,7 +557,7 @@ export const register: Register = on => {
           </Box>
           <Box columnGap={2}>
             <Text dimColor>
-              {tabs.length} {tabs.length === 1 ? 'mod' : 'mods'}
+              {drawn.length + 1} {drawn.length === 0 ? 'mod' : 'mods'}
             </Text>
             <Button key="card-close" plain dimColor label="✕" onPress={() => closeDrawer($)} />
           </Box>
