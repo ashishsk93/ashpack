@@ -15,8 +15,10 @@ import {
   statusGrid,
   stepTab,
   sweep,
+  tabLabel,
   updateTask,
   windowLabel,
+  without,
 } from './format'
 
 const SURFACES = ['terminal', 'desktop'] as const
@@ -114,6 +116,15 @@ test('helpers: names, bars, colors, git, tabs, sweep', () => {
     'ashpack',
   )
   expect(pack.map(m => `${m.name}:${m.state}`)).toEqual(['ashpack:on', 'hello:off', 'later:missing'])
+
+  // A wrapping mod's tab keeps its own part, not the badges of the mod beneath it.
+  const baton = { type: 'Text', props: {}, children: ['baton-badge'] }
+  const skins = { type: 'Box', props: {}, children: [baton, { type: 'Button', props: { label: 'Skins' }, children: [] }] }
+  expect(flatten(without(skins, baton))).toBe('')
+  expect((without(skins, baton) as { children: unknown[] }).children).toHaveLength(1)
+  expect(without(baton, undefined)).toEqual(baton)
+  expect(tabLabel('ashpack-skins', 'ashpack')).toBe('skins')
+  expect(tabLabel('baton', 'ashpack')).toBe('baton')
 
   // The lit block enters at the right edge and leaves at the left.
   expect(sweep(0, 6, 2)).toBe('▱▱▱▱▱▱')

@@ -19,6 +19,8 @@ import {
   sweep,
   TRAIL,
   updateTask,
+  tabLabel,
+  without,
 } from './format'
 
 // AshPack. Everything that touches `$` lives in this one file (the engine
@@ -494,7 +496,8 @@ export const register: Register = on => {
     const tabs = [
       { name: HOME_TAB, tree: null },
       { name: MODS_TAB, tree: null },
-      ...drawn.map(t => ({ name: t.plugin, tree: t.returned ?? null })),
+      // The trace runs outer to inner; each tab drops the drawing of the mod beneath it.
+      ...drawn.map((t, i) => ({ name: t.plugin, tree: (without(t.returned, drawn[i + 1]?.returned) as typeof t.returned) ?? null })),
     ]
     const names = tabs.map(t => t.name)
     const active = tabs.find(t => t.name === picked) ?? { name: HOME_TAB, tree: null }
@@ -559,7 +562,7 @@ export const register: Register = on => {
                 key={`tab-${t.name}`}
                 plain
                 dimColor={t.name !== active.name}
-                label={t.name === active.name ? `[${t.name}]` : t.name}
+                label={t.name === active.name ? `[${tabLabel(t.name, PACK)}]` : tabLabel(t.name, PACK)}
                 onPress={() => update($, tab, () => t.name)}
               />
             ))}

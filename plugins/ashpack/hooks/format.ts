@@ -228,3 +228,18 @@ export const describeTool = (tool: string, input: unknown): string => {
       return `Using ${tool.replace(/^mcp__/, '').replace(/__/g, ' ')}`
   }
 }
+
+// A mod that wraps the mods beneath it returns their badges inside its own tree.
+// `without` drops every child that deep-equals `inner`, so its tab keeps only its own part.
+export const without = (tree: unknown, inner: unknown): unknown => {
+  const key = JSON.stringify(inner)
+  const strip = (node: unknown): unknown => {
+    const children = (node as { children?: unknown })?.children
+    if (!Array.isArray(children)) return node
+    return { ...(node as object), children: children.filter(c => JSON.stringify(c) !== key).map(strip) }
+  }
+  return strip(tree)
+}
+
+// A tab's name: the pack's own mods drop the pack's prefix (`ashpack-skins` -> `skins`).
+export const tabLabel = (plugin: string, pack: string): string => plugin.replace(new RegExp(`^${pack}-`), '')
