@@ -122,11 +122,6 @@ const fit = (t: string, width: number): string => {
 // The room a card takes, from the cells the surface reports, in a range it reads well at.
 export const cardWidth = (columns: number | undefined): number => Math.round(Math.min(1100, Math.max(480, (columns ?? 100) * 6.4)))
 
-const RISE =
-  '.r{opacity:0;animation:r .4s cubic-bezier(.2,.8,.2,1) forwards}' +
-  '@keyframes r{from{opacity:0;transform:translateY(4px)}to{opacity:1;transform:none}}' +
-  '@media (prefers-reduced-motion:reduce){.r{animation:none;opacity:1}}'
-
 const text = (x: number, y: number, t: string, color: string, extra = '') =>
   `<text x="${x}" y="${y}" font-family="${MONO}" font-size="${SIZE}" style="fill:${color}" xml:space="preserve"${extra}>${escape(t)}</text>`
 
@@ -141,15 +136,15 @@ const badge = (right: number, label: string, color: string) => {
   )
 }
 
-// The card: a header (a title, a badge), a hairline, then its rows, each a <g> that rises in.
-const frame = (p: Palette, width: number, title: string, mark: [string, string] | null, rows: string[], alt: string, animate: boolean): Card => {
+// The card: a header (a title, a badge), a hairline, then its rows. No entry animation:
+// the desktop app keeps a message's first tree and re-mounts it on every layout change.
+const frame = (p: Palette, width: number, title: string, mark: [string, string] | null, rows: string[], alt: string): Card => {
   const height = HEAD + 8 + Math.max(1, rows.length) * LINE + 10
   const wrap = (row: string, i: number) =>
-    animate ? `<g class="r" style="animation-delay:${60 + Math.min(i, 30) * 22}ms">${row}</g>` : `<g>${row}</g>`
+    `<g>${row}</g>`
   const markW = mark ? mark[0].length * CHAR + 32 : 0
   const source =
     `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" viewBox="0 0 ${width} ${height}">` +
-    (animate ? `<style>${RISE}</style>` : '') +
     text(PAD, HEAD / 2 + 4, fit(title, width - PAD * 2 - markW), p.muted) +
     (mark ? badge(width - PAD, mark[0], mark[1]) : '') +
     `<line x1="0" y1="${HEAD - 0.5}" x2="${width}" y2="${HEAD - 0.5}" stroke="${p.muted}" stroke-opacity=".3"/>` +
@@ -164,7 +159,7 @@ const baseline = (i: number) => top(i) + 14
 const band = (i: number, width: number, color: string, opacity: number) =>
   `<rect x="1" y="${top(i)}" width="${width - 2}" height="${LINE}" fill="${color}" fill-opacity="${opacity}"/>`
 
-export const codeSvg = (lang: string, code: string, p: Palette, width: number, animate: boolean): Card => {
+export const codeSvg = (lang: string, code: string, p: Palette, width: number): Card => {
   const lines = code.split('\n')
   const gutter = String(lines.length).length * CHAR + 14
   const roles: Record<Token['role'], string> = { plain: p.text, comment: p.muted, string: p.green, number: p.yellow, keyword: p.purple }
@@ -178,10 +173,10 @@ export const codeSvg = (lang: string, code: string, p: Palette, width: number, a
     })
     return text(PAD, baseline(i), String(i + 1).padStart(String(lines.length).length), p.muted, ' fill-opacity=".7"') + spans.join('')
   })
-  return frame(p, width, lang || 'code', [`${lines.length} line${lines.length === 1 ? '' : 's'}`, p.muted], rows, code, animate)
+  return frame(p, width, lang || 'code', [`${lines.length} line${lines.length === 1 ? '' : 's'}`, p.muted], rows, code)
 }
 
-export const tableSvg = (t: Table, p: Palette, width: number, animate: boolean): Card => {
+export const tableSvg = (t: Table, p: Palette, width: number): Card => {
   const gap = 18
   const natural = t.header.map((h, c) => Math.max([...h].length, ...t.rows.map(r => [...(r[c] ?? '')].length)) * CHAR)
   const room = width - PAD * 2 - gap * (t.header.length - 1)
@@ -195,10 +190,10 @@ export const tableSvg = (t: Table, p: Palette, width: number, animate: boolean):
     ...t.rows.map((r, i) => (i % 2 === 0 ? band(i + 1, width, p.text, 0.05) : '') + cells(r, i + 1, p.text)),
   ]
   const alt = [t.header, ...t.rows].map(r => r.join(' | ')).join('\n')
-  return frame(p, width, 'table', [`${t.rows.length} row${t.rows.length === 1 ? '' : 's'}`, p.muted], rows, alt, animate)
+  return frame(p, width, 'table', [`${t.rows.length} row${t.rows.length === 1 ? '' : 's'}`, p.muted], rows, alt)
 }
 
-export const diffSvg = (d: Diff, shownPath: string, p: Palette, width: number, animate: boolean, max = 60): Card => {
+export const diffSvg = (d: Diff, shownPath: string, p: Palette, width: number, max = 60): Card => {
   // Each line with the number it has in the new file (or the old, for a removed line).
   const numbered = d.hunks.flatMap((h, hi) => {
     let oldNo = h.oldStart
@@ -221,12 +216,12 @@ export const diffSvg = (d: Diff, shownPath: string, p: Palette, width: number, a
     return tint + num + text(PAD + gutter, baseline(i), fit(l, width - PAD * 2 - gutter), color)
   })
   const mark: [string, string] = d.isNew ? [`new · ${d.added}`, p.green] : [`+${d.added} −${d.removed}`, d.removed > d.added ? p.red : p.green]
-  return frame(p, width, shownPath, mark, rows, d.hunks.flatMap(h => h.lines).join('\n'), animate)
+  return frame(p, width, shownPath, mark, rows, d.hunks.flatMap(h => h.lines).join('\n'))
 }
 
 const STATUS = (p: Palette, s: Shell['status']) => (s === 'ok' ? p.green : s === 'failed' ? p.red : p.yellow)
 
-export const terminalSvg = (s: Shell, p: Palette, width: number, animate: boolean): Card => {
+export const terminalSvg = (s: Shell, p: Palette, width: number): Card => {
   const lines = outputLines(s)
   const rows = (lines.length === 0 ? [{ text: 'no output', isErr: false }] : lines).map((l, i) =>
     'fold' in l
@@ -234,5 +229,5 @@ export const terminalSvg = (s: Shell, p: Palette, width: number, animate: boolea
       : text(PAD, baseline(i), fit(l.text, width - PAD * 2), lines.length === 0 ? p.muted : l.isErr ? p.red : p.text),
   )
   const alt = [`$ ${s.command}`, ...lines.map(l => ('fold' in l ? `… ${l.fold} more lines` : l.text))].join('\n')
-  return frame(p, width, s.command ? `$ ${s.command}` : 'shell', [s.status, STATUS(p, s.status)], rows, alt, animate)
+  return frame(p, width, s.command ? `$ ${s.command}` : 'shell', [s.status, STATUS(p, s.status)], rows, alt)
 }

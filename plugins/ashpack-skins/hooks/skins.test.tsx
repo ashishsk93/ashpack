@@ -218,9 +218,9 @@ test('a reply draws in the skin\'s colors, with code and tables as cards', async
       expect(drawn).toContain('"key":"copy-block-4"')
       expect(drawn).toContain('"borderStyle":"round"')
     } else {
-      // SVG cards whose rows rise in, each with a Copy button.
+      // SVG cards, still (no entry animation), each with a Copy button.
       expect(drawn).toContain('"type":"Svg"')
-      expect(drawn).toContain('@keyframes r')
+      expect(drawn).not.toContain('@keyframes')
       await reply.press({ key: 'copy-block-4' })
       expect(copied.at(-1)).toBe('let x = 1')
     }
@@ -284,12 +284,9 @@ test('the desktop draws tool rows, group rows, diff and terminal cards; the spin
   expect(await drawnOf(await mount('terminal', 'ToolGroup', { calls, isActive: false, isExpanded: false }))).toContain('engine-ToolGroup')
 
   const diff = await drawnOf(await mount('desktop', 'ToolResult', { tool_use_id: 'e1', tool: 'Edit', output: edit, isErrored: false }, 'e1'))
-  for (const part of ['"type":"Svg"', 'src/auth.ts', 'const b = 3', '+1 −1', '@keyframes r']) expect(diff).toContain(part)
-  // A card's rows rise in when it is new; a redraw later (a resize, the side panel opening) is drawn still.
-  await clock.advance(2000)
-  const again = await drawnOf(await mount('desktop', 'ToolResult', { tool_use_id: 'e1', tool: 'Edit', output: edit, isErrored: false }, 'e1'))
-  expect(again).toContain('const b = 3')
-  expect(again).not.toContain('@keyframes')
+  for (const part of ['"type":"Svg"', 'src/auth.ts', 'const b = 3', '+1 −1']) expect(diff).toContain(part)
+  // No entry animation: the desktop re-mounts a message's first tree on every layout change.
+  expect(diff).not.toContain('@keyframes')
   const term = await drawnOf(await mount('desktop', 'ToolResult', { tool_use_id: 'b1', tool: 'Bash', output: shell, isErrored: false }))
   for (const part of ['"type":"Svg"', 'ok 3 tests', 'warn: slow', '"label":"Copy"']) expect(term).toContain(part)
   // The terminal keeps Claude Code's own diff and output.

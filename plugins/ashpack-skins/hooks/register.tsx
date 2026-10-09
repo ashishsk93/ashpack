@@ -12,7 +12,7 @@ import { cardLayout, duration, isLightTheme, kindColor, kindOf, OFF, paletteOf, 
 // AshPack Skins. Recolors the prompt, the replies, tool rows, spinner words and turn
 // footer in a skin's colors. On the desktop app it also draws tool rows and group rows
 // (a line icon, the target, lines changed, time taken), edits as diff cards, shell
-// output in a terminal card, code and tables as cards whose rows rise in when new, and
+// output in a terminal card, code and tables as cards, and
 // a moving mark for what the turn is doing. The terminal keeps plain rows and Claude
 // Code's own diffs and output. The picker is a page of the AshPack drawer (`/skin` opens
 // it there), or a pane of its own without AshPack. Dark or light picks the palette and
@@ -47,8 +47,6 @@ const frame = atom({ plugin: 'ashpack-skins', key: 'frame' } as const, 0)
 const FRAME_MS = 120
 const SPINNER_CELLS = 4 // the terminal spinner's wave
 const SPINNER_PX = 25 // the desktop spinner's wave: four bars
-const ANIMATE_MS = 1500 // a card's rows rise in during its first moments only
-const MAX_SEEN = 500
 const EDITS = new Set(['Edit', 'Write', 'MultiEdit'])
 
 type Active = { skin: Skin; p: Palette }
@@ -257,19 +255,6 @@ type DrawInput =
   | RenderInput<'ToolGroup'>
   | RenderInput<'Spinner'>
 
-// When each card was first drawn. A redraw (a resize, the side panel opening) is drawn
-// still, so the rows rise in once.
-// ponytail: module memory, starts over on reload; capped at MAX_SEEN keys
-const firstSeen = new Map<string, number>()
-
-async function isNew($: EngineInterface, key: string): Promise<boolean> {
-  const now = await $.clock.now()
-  const seen = firstSeen.get(key)
-  if (seen !== undefined) return now - seen < ANIMATE_MS
-  firstSeen.set(key, now)
-  if (firstSeen.size > MAX_SEEN) firstSeen.delete(firstSeen.keys().next().value ?? key)
-  return true
-}
 
 function copyText($: EngineInterface, e: DrawInput, text: string): void {
   void $.ui.copy({ text, surface: e.surface }).then(r => $.ui.toast(r.isCopied ? 'Copied' : 'Could not copy here'))
@@ -381,9 +366,6 @@ async function replyBlocks($: EngineInterface, e: RenderInput<'AssistantMessage'
   const { p } = a
   const width = cardWidth(e.viewport?.columns)
   // Which of the desktop's cards are new, so only they rise in.
-  const fresh = await Promise.all(
-    blocks.map((b, i) => (e.surface !== 'terminal' && (b.kind === 'code' || b.kind === 'markdown') ? isNew($, `${e.requestId}:${i}`) : false)),
-  )
   const { Box, Code, Link, Markdown, Text, Button } = $.ui.resolve(e)
   const spans = (list: readonly Inline[], key: string, color: string) =>
     list.map((s, i) =>
@@ -424,7 +406,7 @@ async function replyBlocks($: EngineInterface, e: RenderInput<'AssistantMessage'
         )
       case 'code':
         // The desktop: a code card. The terminal: Claude Code's highlighting, and a Copy under it.
-        if (e.surface !== 'terminal') return cardTree($, e, codeSvg(b.lang, b.code, p, width, fresh[i] === true), b.code, k)
+        if (e.surface !== 'terminal') return cardTree($, e, codeSvg(b.lang, b.code, p, width), b.code, k)
         return (
           <Box flexDirection="column">
             <Code source={b.code} {...(b.lang ? { language: b.lang } : {})} />
@@ -439,7 +421,7 @@ async function replyBlocks($: EngineInterface, e: RenderInput<'AssistantMessage'
         // A table: a card on the desktop, an outlined grid on the terminal.
         const table = tableOf(b.text)
         if (!table) return <Markdown text={b.text} />
-        if (e.surface !== 'terminal') return cardTree($, e, tableSvg(table, p, width, fresh[i] === true), b.text, k)
+        if (e.surface !== 'terminal') return cardTree($, e, tableSvg(table, p, width), b.text, k)
         return tableGrid($, e, p, table)
       }
     }
@@ -594,13 +576,13 @@ export const register: Register = on => {
     const diff = EDITS.has(e.props.tool) && !e.props.isErrored ? diffOf(e.props.output) : null
     if (diff) {
       const path = targetOf('Edit', { file_path: diff.path }, await $.session.cwd())
-      const card = diffSvg(diff, path, a.p, width, await isNew($, e.requestId))
+      const card = diffSvg(diff, path, a.p, width)
       return cardTree($, e, card, card.alt, e.requestId) ?? next(e)
     }
     const shell = e.props.tool === 'Bash' ? shellOf(e.props.output, await read($, memberOf(commandOf, e)), e.props.isErrored) : null
     if (!shell) return next(e)
     const output = [shell.stdout, shell.stderr].filter(t => t.trim() !== '').join('\n')
-    return cardTree($, e, terminalSvg(shell, a.p, width, await isNew($, e.requestId)), output, e.requestId) ?? next(e)
+    return cardTree($, e, terminalSvg(shell, a.p, width), output, e.requestId) ?? next(e)
   })
 
   // A reply in the skin's colors, block by block. A summary row keeps Claude Code's.

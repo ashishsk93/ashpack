@@ -14,12 +14,12 @@ Text colors only, no painted backgrounds. A skin recolors your prompts, Claude's
 | Runs of calls | One row, `Run 2 · Read 3` | Claude Code's own |
 | Edits | A diff card: `+N −M`, changed lines in green and red | Claude Code's own |
 | Shell commands | A terminal card: status, output, stderr apart, long output folded, Copy | Claude Code's own |
-| Tables in replies | A card whose rows rise in once, with Copy | An outlined grid |
+| Tables in replies | A card, with Copy | An outlined grid |
 | Code in replies | A card with line numbers and colouring, with Copy | Claude Code's highlighting, with Copy |
 | Spinner | A wave in the skin's accent beside the step | The skin's word, then a wave |
 | Your prompts | A rounded outline sized to what you typed | The same |
 
-Cards animate only when new; a redraw (a resize, the drawer opening) shows them still. With ashpack-status' compact mode on, tool rows are not drawn. The stored conversation and what the model reads do not change.
+Cards are still: the desktop app keeps a message's first drawing and re-mounts it on every layout change, so an entry animation would replay each time. With ashpack-status' compact mode on, tool rows are not drawn. The stored conversation and what the model reads do not change.
 
 ## Picking a skin
 

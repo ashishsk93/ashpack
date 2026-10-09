@@ -93,7 +93,9 @@ async function loadStatus($: EngineInterface): Promise<void> {
     costUsd: usage.cost?.usd,
     startedAt: usage.startedAt,
   }
-  await update($, status, () => data)
+  // Only a change is written: every write makes the desktop app re-lay out the transcript.
+  const held = await read($, status)
+  if (JSON.stringify(held) !== JSON.stringify(data)) await update($, status, () => data)
 }
 
 // Never lets the status rows break the event they ride on.
@@ -371,6 +373,8 @@ export const register: Register = on => {
 
   // ── compact mode: what the popup says, and the task list it splits into sections ──
   on('tool.call', async ($, e, next) => {
+    // Outside a turn (a plugin's own background call) there is nothing to show: no write.
+    if ((await read($, activity)) === null) return next(e)
     const label = describeTool(String(e.tool), e)
     await update($, activity, a => a && { ...a, label, steps: a.steps + 1 })
     const isMain = !e.agentId // a subagent's list is its own
