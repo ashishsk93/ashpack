@@ -4,13 +4,13 @@ Personal Claude Code mods. This repo is a plugin marketplace; each mod lives in 
 
 ## ashpack
 
-- **Status chips**: one row of pills:
+- **Status chips**: one row:
 
   ```
   ◆ Opus 5.5 1M · ◕ high   ⎇ main ●1 ↑1   ctx ▰▰▱▱▱▱ 42%   session ▰▱▱▱▱▱ 23% ↻2h14m   week ▰▰▱▱▱▱ 41%  fable ▰▱▱▱▱▱ 12% ↻3d4h   ashpack · $1.24 · 23m
   ```
 
-  `●` changed files, `↑`/`↓` ahead/behind, `↻` time to reset. Each bar is a row of segments: green below 60%, amber below 85% and red from 85%. With a skin on, the model takes the skin's accent. The chips refresh on a timer, on each prompt and turn, and when the model changes. Where they sit: under the prompt in a fullscreen terminal, and above it elsewhere: on the terminal's main screen as a spaced row, in the desktop app as outlined pills. In the desktop app, the working popup takes their place while Claude works, so the two never stack.
+  `●` changed files, `↑`/`↓` ahead/behind, `↻` time to reset. Each bar is a row of segments: green below 60%, amber below 85% and red from 85%. With a skin on, the model takes the skin's accent. The chips refresh on a timer, on each prompt and turn, and when the model changes. Where they sit: under the prompt in a fullscreen terminal, and above it elsewhere. The desktop app draws the bars as images, so the segments line up whatever its font does, and the working popup takes the chips' place while Claude works, so the two never stack.
 - **Compact mode**: hides tool calls, tool groups, progress pills and the spinner. Replies stay. While Claude works, a popup above the prompt (half the width) shows the elapsed time and one row for each section of the work, at most five. The sections are Claude's task list when it keeps one. Otherwise they are the last three finished steps (for example `✓ Reading format.ts`) and the running step. Finished rows have `✓`, waiting rows `○`, and the running row `▸` with a loader beside it: a wave of bars that rise and fall in turn (`▅▇█▇▄▂▁▂`). With a skin on, the wave takes the skin's accent; otherwise it is blue. The desktop app draws the loader as an animated image and leaves out the elapsed time. Press ctrl+o to see everything.
 - **Drawer**: click `◆ AshPack ▸` in the footer, or run `/ashpack`. A side panel opens, docked beside the transcript in the desktop app and in a fullscreen terminal (inline above the prompt on the terminal's main screen). It has one page per tab:
   - **Home**: the switches for compact mode and status rows.

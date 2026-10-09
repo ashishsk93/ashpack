@@ -75,18 +75,39 @@ export const parseGit = (porcelain: string): GitInfo | null => {
 
 // ── the status chips: one row of outlined pills ──
 
-export type Span = { text: string; color?: string; dim?: boolean; bold?: boolean }
+export type TextSpan = { text: string; color?: string; dim?: boolean; bold?: boolean }
+export type BarSpan = { bar: number; width: number } // a segment bar: percent over `width` segments
+export type Span = TextSpan | BarSpan
 export type Cell = Span[]
 
-const meter = (label: string, percent: number, width: number): Cell => {
-  const [lit, track] = bar(percent, width)
-  return [
-    { text: `${label} `, dim: true },
-    { text: lit, color: levelColor(percent) },
-    { text: track, dim: true },
-    { text: ` ${Math.round(percent)}%`, color: levelColor(percent) },
-  ]
+export const isBar = (sp: Span): sp is BarSpan => 'bar' in sp
+
+// A bar as text, for the terminal and the tests: lit segments, then empty ones.
+export const barSpans = (sp: BarSpan): TextSpan[] => {
+  const [lit, track] = bar(sp.bar, sp.width)
+  return [{ text: lit, color: levelColor(sp.bar) }, { text: track, dim: true }]
 }
+
+const meter = (label: string, percent: number, width: number): Cell => [
+  { text: `${label} `, dim: true },
+  { bar: percent, width },
+  { text: ` ${Math.round(percent)}%`, color: levelColor(percent) },
+]
+
+const SEG_W = 7
+const SEG_GAP = 3
+const SEG_H = 7
+
+// The desktop's bar: the segments as an image, so they line up whatever the font does.
+export const barSvg = (percent: number, width: number): string => {
+  const lit = Math.min(width, Math.max(0, Math.round((percent / 100) * width)))
+  const color = levelColor(percent)
+  const w = width * (SEG_W + SEG_GAP) - SEG_GAP
+  const rects = Array.from({ length: width }, (_, i) => `<rect x="${i * (SEG_W + SEG_GAP)}" width="${SEG_W}" height="${SEG_H}" rx="1.5" fill="${color}" opacity="${i < lit ? 1 : 0.25}"/>`).join('')
+  return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${w} ${SEG_H}" width="${w}" height="${SEG_H}">${rects}</svg>`
+}
+
+export const barPx = (width: number): number => width * (SEG_W + SEG_GAP) - SEG_GAP
 
 const resetIn = (r: RateWindow, now: number): Span[] => {
   const at = r.resetsAt ? Date.parse(r.resetsAt) : NaN

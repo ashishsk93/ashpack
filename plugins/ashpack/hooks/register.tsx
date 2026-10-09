@@ -2,14 +2,18 @@ import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register, RenderElement, RenderInput, Timer } from 'claude-code'
 
 import type { Activity, PackMod, Section, StatusData } from '../types'
-import type { Cell, Page, Segment } from './format'
+import type { Page, Segment, TextSpan } from './format'
 import {
   addTask,
   around,
   COLORS,
   describeTool,
   findPages,
+  barPx,
+  barSpans,
+  barSvg,
   chipBarWidth,
+  isBar,
   parseGit,
   packMods,
   planFromTodos,
@@ -117,23 +121,30 @@ const isUnderPrompt = (e: { surface: string; viewport?: { isFullscreen?: boolean
 
 type StatusSite = RenderInput<'PromptHint'> | RenderInput<'AbovePrompt'>
 
-// The chips as a tree: outlined pills on the desktop, a spaced row on the terminal (a
-// border there costs two rows per chip). Wraps when the row is short.
+// The chips as a tree. The desktop: one strip, the bars as images (its font sets the
+// segment glyphs at odd heights), wide gaps between the chips. The terminal: a spaced
+// row of text. Both wrap when the row is short.
 function drawChips($: EngineInterface, e: StatusSite, data: StatusData, now: number, total: number, accent: string) {
   const { Box, Text } = $.ui.resolve(e)
   const chips = statusChips(data, now, chipBarWidth(total), accent)
   const isTerminal = e.surface === 'terminal'
+  // Svg is not in the terminal's table: resolved only off it.
+  const Svg = e.surface === 'terminal' ? null : $.ui.resolve(e).Svg
+  const text = (sp: TextSpan, key: string) => (
+    <Text key={key} color={sp.color} dimColor={sp.dim} bold={sp.bold}>
+      {sp.text}
+    </Text>
+  )
   return (
-    <Box flexWrap="wrap" columnGap={isTerminal ? 2 : 1}>
+    <Box flexWrap="wrap" columnGap={isTerminal ? 2 : 3} rowGap={isTerminal ? 0 : 1}>
       {chips.map((spans, c) => (
-        <Box key={`chip-${c}`} {...(isTerminal ? {} : { borderStyle: 'round' as const, borderColor: COLORS.muted, paddingX: 1 })}>
-          <Text key={`cell-${c}`} wrap="truncate-end">
-            {spans.map((sp, i) => (
-              <Text key={`cell-${c}-${i}`} color={sp.color} dimColor={sp.dim} bold={sp.bold}>
-                {sp.text}
-              </Text>
-            ))}
-          </Text>
+        <Box key={`chip-${c}`} alignItems="center">
+          {spans.map((sp, i) => {
+            const key = `cell-${c}-${i}`
+            if (!isBar(sp)) return text(sp, key)
+            if (isTerminal || !Svg) return <Text key={key}>{barSpans(sp).map((t, j) => text(t, `${key}-${j}`))}</Text>
+            return <Svg key={key} source={barSvg(sp.bar, sp.width)} alt={`${Math.round(sp.bar)}%`} width={barPx(sp.width)} height={7} />
+          })}
         </Box>
       ))}
     </Box>

@@ -4,9 +4,12 @@ import {
   addTask,
   around,
   bar,
+  barSpans,
+  barSvg,
   COLORS,
   effortLabel,
   findPages,
+  isBar,
   levelColor,
   parseGit,
   packMods,
@@ -78,7 +81,8 @@ test('helpers: names, bars, colors, git, tabs, loader', () => {
     4,
     '#fab387',
   )
-  expect(chips.map(cell => cell.map(sp => sp.text).join(''))).toEqual([
+  const textOf = (cell: (typeof chips)[number]) => cell.flatMap(sp => (isBar(sp) ? barSpans(sp) : [sp])).map(sp => sp.text).join('')
+  expect(chips.map(textOf)).toEqual([
     '◆ Opus 5.5 1M · ◕ high',
     '⎇ main',
     'ctx ▰▰▱▱ 42%',
@@ -86,7 +90,11 @@ test('helpers: names, bars, colors, git, tabs, loader', () => {
     'week ▰▰▱▱ 41%  fable ▱▱▱▱ 12% ↻3d4h',
     'ashpack · $1.24 · 23m',
   ])
-  expect(chips[0]?.[0]?.color).toBe('#fab387') // the model wears the skin's accent
+  const model = chips[0]?.[0]
+  expect(model && !isBar(model) ? model.color : undefined).toBe('#fab387') // the model wears the skin's accent
+  // The desktop's bar: one image, lit segments solid and the rest faint.
+  expect(barSvg(42, 4)).toMatch(/^<svg .*opacity="1".*opacity="0.25".*<\/svg>$/)
+  expect((barSvg(42, 4).match(/<rect/g) ?? []).length).toBe(4)
 
   // Sections: the phases with no task list, else the list itself.
   // No task list: the latest finished steps, then the running one.
@@ -308,8 +316,10 @@ test('the status chips draw model, branch, context and usage above the prompt', 
     for (const part of ['Opus 5.5 1M', '◕ high', '⎇ main', '●1', '↑1', 'ashpack', '$1.24', 'ctx', '42%', 'session', '23%', '↻2h14m', 'fable', '91%']) {
       expect(text).toContain(part)
     }
-    const hasBorder = JSON.stringify(await band.drawn()).includes('"borderStyle":"round"')
-    expect(hasBorder).toBe(surface !== 'terminal')
+    // The desktop draws the bars as images; the terminal as text.
+    const hasSvg = JSON.stringify(await band.drawn()).includes('"type":"Svg"')
+    expect(hasSvg).toBe(surface !== 'terminal')
+    if (surface === 'terminal') expect(text).toContain('▰')
     await band.unmount()
 
     // The fullscreen terminal: the grid sits under the prompt, above the engine's hint line.
