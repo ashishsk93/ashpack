@@ -13,6 +13,7 @@ const MODES: Record<string, string> = {
 
 const WINDOWS: Record<string, string> = { five_hour: 'session', seven_day: 'week' }
 
+const EFFORT: Record<string, string> = { low: '◔', medium: '◑', high: '◕', xhigh: '●', max: '●' }
 
 // Mid-tones that read on a light and a dark background alike (3.5:1 or more on the
 // desktop app's off-white, 3.9:1 or more on #1e1e1e): a mod cannot tell which it is drawn on.
@@ -45,6 +46,7 @@ export const windowLabel = (kind: string): string =>
 
 export const modeLabel = (mode: string): string => MODES[mode] ?? mode
 
+export const effortLabel = (level: string): string => `${EFFORT[level] ?? '○'} ${level}`
 
 export const levelColor = (percent: number): string =>
   percent >= 85 ? COLORS.hot : percent >= 60 ? COLORS.warn : COLORS.ok
@@ -89,24 +91,24 @@ const meter = (label: string, percent: number, width: number): Cell => {
 
 const resetIn = (r: RateWindow, now: number): Span[] => {
   const at = r.resetsAt ? Date.parse(r.resetsAt) : NaN
-  return Number.isNaN(at) ? [] : [{ text: ` · resets ${shortDuration(at - now)}`, dim: true }]
+  return Number.isNaN(at) ? [] : [{ text: ` ↻${shortDuration(at - now)}`, dim: true }]
 }
 
 // Columns:   who            where                spend
-// row 1:     model · effort  branch · n changed · n ahead · n behind   folder · $cost · time
-// row 2:     ctx bar         session bar · resets in                    week bar + per-model bars · resets in
+// row 1:     model effort   ⎇ branch ●n ↑n ↓n    folder · $cost · time
+// row 2:     ctx bar        session bar ↻reset   week bar + per-model bars ↻reset
 export const statusGrid = (d: StatusData, now: number, barWidth: number): Cell[][] => {
   const session = d.rateLimits.find(r => r.kind === 'five_hour')
   const weekly = d.rateLimits.filter(r => r.kind !== 'five_hour')
   const resets = new Set(weekly.map(r => r.resetsAt))
   const git: Cell = d.git
     ? [
-        { text: d.git.branch, color: COLORS.ok },
-        ...(d.git.dirty > 0 ? [{ text: ` · ${d.git.dirty} changed`, color: COLORS.warn }] : []),
-        ...(d.git.ahead > 0 ? [{ text: ` · ${d.git.ahead} ahead`, color: COLORS.blue }] : []),
-        ...(d.git.behind > 0 ? [{ text: ` · ${d.git.behind} behind`, color: COLORS.hot }] : []),
+        { text: `⎇ ${d.git.branch}`, color: COLORS.ok },
+        ...(d.git.dirty > 0 ? [{ text: ` ●${d.git.dirty}`, color: COLORS.warn }] : []),
+        ...(d.git.ahead > 0 ? [{ text: ` ↑${d.git.ahead}`, color: COLORS.blue }] : []),
+        ...(d.git.behind > 0 ? [{ text: ` ↓${d.git.behind}`, color: COLORS.hot }] : []),
       ]
-    : [{ text: 'no repo', dim: true }]
+    : [{ text: '⎇ no repo', dim: true }]
   const spend: Cell = [
     { text: d.folder },
     { text: `${d.costUsd !== undefined ? ` · ${money(d.costUsd)}` : ''} · ${shortDuration(now - d.startedAt)}`, dim: true },
@@ -120,7 +122,7 @@ export const statusGrid = (d: StatusData, now: number, barWidth: number): Cell[]
   const lastWeekly = weekly.at(-1)
   return [
     [
-      [{ text: prettyModel(d.model), color: COLORS.accent, bold: true }, ...(d.effort ? [{ text: ` · ${d.effort}`, color: COLORS.blue }] : [])],
+      [{ text: `◆ ${prettyModel(d.model)}`, color: COLORS.accent, bold: true }, ...(d.effort ? [{ text: ` ${effortLabel(d.effort)}`, color: COLORS.blue }] : [])],
       git,
       spend,
     ],

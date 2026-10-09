@@ -29,7 +29,7 @@ import {
 //     line ("auto mode on"); outside fullscreen, where that line is one row,
 //     it moves to the band above the prompt
 //   - compact mode: tool rows hidden, a working popup above the prompt
-//   - drawer: "AshPack" in the footer opens a side pane of pages: Home (the
+//   - drawer: "◆ AshPack" in the footer opens a side pane of pages: Home (the
 //     toggles), a page for each mod that draws one into the pane, and Mods
 // The drawer needs ashpack outermost: first in enabledPlugins (settings.json),
 // so the mods' pages are in the tree its pane hook gets from `next`.
@@ -303,7 +303,7 @@ function settingRow($: EngineInterface, e: PaneInput, key: string, label: string
         <Text bold>{label}</Text>
         <Text dimColor>{hint}</Text>
       </Box>
-      <Button key={key} plain dimColor={!isOn} label={isOn ? 'On' : 'Off'} onPress={onPress} />
+      <Button key={key} plain dimColor={!isOn} label={isOn ? '● ON ' : '○ OFF'} onPress={onPress} />
     </Box>
   )
 }
@@ -331,7 +331,7 @@ const COMPACT_HINT = {
 } as const
 
 const ACTION: Record<PackMod['state'], string> = { on: 'turn off', off: 'turn on', missing: 'install' }
-const STATE: Record<PackMod['state'], string> = { on: 'on', off: 'off', missing: 'not installed' }
+const STATE: Record<PackMod['state'], [string, string | undefined]> = { on: ['●', COLORS.ok], off: ['○', undefined], missing: ['+', undefined] }
 
 // The pack's mods, one row each with what a press does, then the pack's update.
 function modsPage($: EngineInterface, e: PaneInput, mods: readonly PackMod[], busy: string | null) {
@@ -341,15 +341,18 @@ function modsPage($: EngineInterface, e: PaneInput, mods: readonly PackMod[], bu
     <Box key="page-mods" flexDirection="column" rowGap={1}>
       <Box flexDirection="column">
         {mods.map(m => {
+          const [mark, color] = STATE[m.state]
           return (
             <Box key={`mod-row-${m.name}`} justifyContent="space-between" columnGap={2}>
               <Text wrap="truncate-end">
-                <Text color={m.name === PACK ? ACCENT : undefined} dimColor={m.state !== 'on'}>
-                  {m.name}
+                <Text color={m.name === PACK ? ACCENT : color} dimColor={m.state !== 'on'}>
+                  {m.name === PACK ? '◆' : mark}
                 </Text>
-                <Text dimColor> · {m.name === PACK ? 'this pack' : STATE[m.state]}</Text>
+                <Text dimColor={m.state !== 'on'}> {m.name}</Text>
               </Text>
-              {m.name === PACK ? null : (
+              {m.name === PACK ? (
+                <Text dimColor>this pack</Text>
+              ) : (
                 <Button key={`mod-${m.name}`} plain dimColor label={busy === m.name ? '…' : ACTION[m.state]} onPress={() => packAction($, m)} />
               )}
             </Box>
@@ -358,7 +361,7 @@ function modsPage($: EngineInterface, e: PaneInput, mods: readonly PackMod[], bu
       </Box>
       <Box justifyContent="space-between" columnGap={2}>
         <Text dimColor>Changes apply after /reload-plugins.</Text>
-        <Button key="mods-update" plain label={busy === 'update' ? 'Updating…' : 'Update all'} onPress={() => packAction($, null)} />
+        <Button key="mods-update" plain label={busy === 'update' ? '… updating' : '↻ update all'} onPress={() => packAction($, null)} />
       </Box>
     </Box>
   )
@@ -560,15 +563,18 @@ export const register: Register = on => {
     )
   })
 
-  // ── footer: the mods that draw here (those without a drawer page), then "AshPack" ──
+  // ── footer: the mods that draw here (those without a drawer page), then "◆ AshPack" ──
   on('ui.render', { component: 'SessionMode' }, async ($, e, next) => {
     const below = await next(e)
     const isOpen = await read($, drawerOpen)
-    const { Box, Button } = $.ui.resolve(e)
+    const { Box, Button, Text } = $.ui.resolve(e)
     return (
       <Box columnGap={2}>
         {below}
-        <Button key="ashpack" plain label="AshPack" onPress={() => (isOpen ? closeDrawer($) : openDrawer($))} />
+        <Box>
+          <Text color={ACCENT}>◆ </Text>
+          <Button key="ashpack" plain label={isOpen ? 'AshPack ◂' : 'AshPack ▸'} onPress={() => (isOpen ? closeDrawer($) : openDrawer($))} />
+        </Box>
       </Box>
     )
   })
@@ -617,7 +623,7 @@ export const register: Register = on => {
         <Box justifyContent="space-between" columnGap={2}>
           <Text wrap="truncate-end">
             <Text bold color={ACCENT}>
-              AshPack
+              ◆ AshPack
             </Text>
             <Text dimColor> · your mods, one place</Text>
           </Text>

@@ -7,16 +7,16 @@ Personal Claude Code mods. This repo is a plugin marketplace; each mod lives in 
 - **Status grid**: 2 rows × 3 sections, under the prompt, above the engine's hint line ("auto mode on"):
 
   ```
-  Opus 5.5 1M · high   │ main · 1 changed · 1 ahead      │ ashpack · $1.24 · 23m
-  ctx ━━━─── 42%       │ session ━───── 23% · resets 2h14m │ week ━━──── 41%  fable ━───── 12% · resets 3d4h
+  ◆ Opus 5.5 1M ◕ high   │ ⎇ main ●1 ↑1             │ ashpack · $1.24 · 23m
+  ctx ━━━─── 42%         │ session ━───── 23% ↻2h14m │ week ━━──── 41%  fable ━───── 12% ↻3d4h
   ```
 
-  Each bar is a solid line over a faint track: green below 60%, amber below 85% and red from 85%. The colors are mid-tones that read on a light or a dark background, in the terminal and the desktop app. Outside fullscreen, and in the desktop app, the grid sits directly above the prompt: the terminal's main screen has one row under the prompt, and the desktop app draws nothing of a mod's there.
+  `●` changed files, `↑`/`↓` ahead/behind, `↻` time to reset. Each bar is a solid line over a faint track: green below 60%, amber below 85% and red from 85%. The colors are mid-tones that read on a light or a dark background, in the terminal and the desktop app. Outside fullscreen, and in the desktop app, the grid sits directly above the prompt: the terminal's main screen has one row under the prompt, and the desktop app draws nothing of a mod's there.
 - **Compact mode**: hides tool calls, tool groups, progress pills and the spinner. Replies stay. While Claude works, a popup above the prompt (half the width) shows the elapsed time and one row for each section of the work, at most five. The sections are Claude's task list when it keeps one. Otherwise they are the last three finished steps (for example `✓ Reading format.ts`) and the running step. Finished rows have `✓`, waiting rows `○`, and the running row `▸` with a loader beside it: a short pill that glides along a thin track (`──╺━━━━╸────`), in the same line style as the bars. The desktop app draws the loader as an animated image and leaves out the elapsed time. Press ctrl+o to see everything. In the desktop app, compact mode adds only the popup: the app draws tool calls itself, collapsed into lines like `Ran 2 commands`, and a mod cannot hide them. The app's most compact transcript view, **Normal**, is that collapsed one.
-- **Drawer**: click `AshPack` in the footer, or run `/ashpack`. A side panel opens, docked beside the transcript in the desktop app and in a fullscreen terminal (inline above the prompt on the terminal's main screen). It has one page per tab:
+- **Drawer**: click `◆ AshPack ▸` in the footer, or run `/ashpack`. A side panel opens, docked beside the transcript in the desktop app and in a fullscreen terminal (inline above the prompt on the terminal's main screen). It has one page per tab:
   - **Home**: the switches for compact mode and status rows.
   - **A page for each mod that supports AshPack**, for example **Skins** and **Baton**. These mods leave the footer, so they do not compete for its space. Mods without a page keep their footer badges.
-  - **Mods**: the mods of this pack, each marked on, off or not installed. Click `turn on`, `turn off` or `install`, or `Update all`. After a change, AshPack puts `/reload-plugins` in the prompt box; press Enter to apply it.
+  - **Mods**: the mods of this pack, `●` on, `○` off, `+` not installed. Click `turn on`, `turn off` or `install`, or `↻ update all`. After a change, AshPack puts `/reload-plugins` in the prompt box; press Enter to apply it.
 
   `/ashpack <page>` opens the panel on a page (`/ashpack skins`). `/ashpack compact` and `/ashpack status` flip a switch. Esc closes the panel.
 
