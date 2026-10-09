@@ -12,7 +12,7 @@ Personal Claude Code mods. This repo is a plugin marketplace; each mod lives in 
   ```
 
   `●` changed files, `↑`/`↓` ahead/behind, `↻` time to reset. Each bar is a solid line over a faint track: green below 60%, amber below 85% and red from 85%. The colors are mid-tones that read on a light or a dark background, in the terminal and the desktop app. Outside fullscreen, and in the desktop app, the grid sits directly above the prompt: the terminal's main screen has one row under the prompt, and the desktop app draws nothing of a mod's there.
-- **Compact mode**: hides tool calls, tool groups, progress pills and the spinner. Replies stay. While Claude works, a popup above the prompt (half the width) shows the elapsed time and one row for each section of the work, at most five. The sections are Claude's task list when it keeps one. Otherwise they are the last three finished steps (for example `✓ Reading format.ts`) and the running step. Finished rows have `✓`, waiting rows `○`, and the running row `▸` with a loader beside it: a short pill that glides along a thin track (`──╺━━━━╸────`), in the same line style as the bars. The desktop app draws the loader as an animated image and leaves out the elapsed time. Press ctrl+o to see everything. In the desktop app, compact mode adds only the popup: the app draws tool calls itself, collapsed into lines like `Ran 2 commands`, and a mod cannot hide them. The app's most compact transcript view, **Normal**, is that collapsed one.
+- **Compact mode**: hides tool calls, tool groups, progress pills and the spinner. Replies stay. While Claude works, a popup above the prompt (half the width) shows the elapsed time and one row for each section of the work, at most five. The sections are Claude's task list when it keeps one. Otherwise they are the last three finished steps (for example `✓ Reading format.ts`) and the running step. Finished rows have `✓`, waiting rows `○`, and the running row `▸` with a loader beside it: a short pill that glides along a thin track (`──╺━━━━╸────`), in the same line style as the bars. The desktop app draws the loader as an animated image and leaves out the elapsed time. Press ctrl+o to see everything.
 - **Drawer**: click `◆ AshPack ▸` in the footer, or run `/ashpack`. A side panel opens, docked beside the transcript in the desktop app and in a fullscreen terminal (inline above the prompt on the terminal's main screen). It has one page per tab:
   - **Home**: the switches for compact mode and status rows.
   - **A page for each mod that supports AshPack**, for example **Skins** and **Baton**. These mods leave the footer, so they do not compete for its space. Mods without a page keep their footer badges.
@@ -47,7 +47,7 @@ Claude Code runs the plugins of the user tier in the order of `enabledPlugins` i
 
 ## ashpack-skins
 
-Twelve skins: Catppuccin, Dracula, Nord, Gruvbox, Tokyo Night, Rosé Pine, Solarized, One, Everforest, GitHub, Kanagawa and Monokai. A skin recolors your prompts, Claude's replies (headings, lists, inline code and links), the spinner and the turn footer, and draws the way [hellosverre/claude-skins](https://github.com/hellosverre/claude-skins) does. Its renderers (MIT) are vendored in `plugins/ashpack-skins/hooks/ref`, fed with these twelve palettes:
+Twelve skins: Catppuccin, Dracula, Nord, Gruvbox, Tokyo Night, Rosé Pine, Solarized, One, Everforest, GitHub, Kanagawa and Monokai. A skin recolors your prompts, Claude's replies (headings, lists, inline code and links), the spinner and the turn footer. In the desktop app it also draws tool calls and cards:
 
 | Site | Desktop app | Terminal |
 | --- | --- | --- |
@@ -55,12 +55,12 @@ Twelve skins: Catppuccin, Dracula, Nord, Gruvbox, Tokyo Night, Rosé Pine, Solar
 | Runs of calls | One row, for example `Run 2 · Read 3`, beside an icon | Claude Code's own |
 | Edits | A diff card: the file, `+N −M`, the changed lines in green and red | Claude Code's own diff |
 | Shell commands | A terminal card: status, output with stderr apart, long output folded, a Copy button | Claude Code's own output |
-| Tables in replies | A card whose rows rise in, with a Copy button | A cell grid with a header band |
-| Code in replies | A card with the language, line numbers and highlighting, and a Copy button | Claude Code's highlighting, and a Copy button |
-| Spinner | An animated icon for what the turn is doing, beside the step the app names | The skin's word |
+| Tables in replies | A card whose rows rise in when it first shows, with a Copy button | An outlined grid, the column names in the skin's accent |
+| Code in replies | A card with the language, line numbers and colouring, and a Copy button | Claude Code's highlighting, and a Copy button |
+| Spinner | A moving mark for what the turn is doing, beside the step the app names | The skin's word |
 | Your prompts | A rounded outline sized to what you typed | The same |
 
-Cards have no background of their own and honour reduced motion. The stored conversation, and what the model reads, do not change.
+Cards have no background of their own, and their rows rise in only when a card is new: a redraw (a resize, the side panel opening) shows it still. With AshPack's compact mode on, tool calls are not shown. The stored conversation, and what the model reads, do not change.
 
 The picker is the **Skins** page of the AshPack drawer: run `/skin`, or open the drawer and click **Skins**. Without AshPack, `/skin` opens it in a panel of its own. Click a card (in the desktop app, the skin's name above the card) or press its key to apply it. Two switches sit above the cards:
 

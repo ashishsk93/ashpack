@@ -3,27 +3,21 @@ import type { EngineInterface, Register, RenderInput } from 'claude-code'
 
 import type { Block, Inline } from './markdown'
 import { parseBlocks } from './markdown'
-import { diffstat } from './ref/format'
-import { splitReply } from './ref/markdown'
-import type { Call, Look } from './ref/rows'
-import { codeCard, copyRow, desktopSpinnerRow, diffCard, groupRow, promptRow, replyRows, tableRows, terminalCard, toolRow } from './ref/rows'
-import type { Palette as SlotPalette } from './ref/skin'
-import { ICONS } from './ref/skin'
-import { hunksOf } from './ref/svg-diff'
-import { shellOutputOf } from './ref/svg-terminal'
-import { kindOf as rowKind, summarize } from './ref/tools'
-import type { Palette, Skin } from './skins'
+import type { Card, Table } from './cards'
+import { cardWidth, codeSvg, diffOf, diffSvg, shellOf, tableOf, tableSvg, terminalSvg } from './cards'
+import type { Phase } from './icons'
+import { phaseIcon, toolIcon } from './icons'
+import type { Kind, Palette, Skin } from './skins'
 import { cardLayout, duration, isLightTheme, kindColor, kindOf, OFF, paletteOf, pick, pixelRows, pixelSvg, pixelWidth, SKINS, skinById, targetOf, themeFor, toolLabel } from './skins'
 
 // AshPack Skins. Recolors the prompt, the replies, tool rows, spinner words and turn
-// footer in a skin's colors, and draws the way hellosverre/claude-skins does (its
-// renderers are vendored in ./ref): on the desktop app, tool rows and group rows with a
-// line icon, lines changed and time taken, edits as diff cards, shell output in a
-// terminal card, code and tables as cards whose rows rise in, and an animated spinner.
-// The terminal keeps plain rows and Claude Code's own diffs and output. The picker is a
-// page of the AshPack drawer (`/skin` opens it there), or a pane of its own without
-// AshPack. Dark or light picks the palette and Claude Code's theme. What the model reads
-// and the stored conversation are untouched.
+// footer in a skin's colors. On the desktop app it also draws tool rows and group rows
+// (a line icon, the target, lines changed, time taken), edits as diff cards, shell
+// output in a terminal card, code and tables as cards whose rows rise in when new, and
+// a moving mark for what the turn is doing. The terminal keeps plain rows and Claude
+// Code's own diffs and output. The picker is a page of the AshPack drawer (`/skin` opens
+// it there), or a pane of its own without AshPack. Dark or light picks the palette and
+// Claude Code's theme. What the model reads and the stored conversation are untouched.
 
 const PANE = 'ashpack-skins' // the picker's own pane, for sessions without AshPack
 const DRAWER = 'ashpack' // the AshPack drawer's pane, where the picker is a page
@@ -48,6 +42,9 @@ const isOn = atom({ plugin: 'ashpack-skins', key: 'isOn' } as const, true)
 const isLight = atom({ plugin: 'ashpack-skins', key: 'isLight' } as const, false)
 const hasImages = atom({ plugin: 'ashpack-skins', key: 'images' } as const, false)
 const tookMs = atom({ plugin: 'ashpack-skins', key: 'duration' } as const, -1) // per tool call: how long it ran
+const commandOf = atom({ plugin: 'ashpack-skins', key: 'command' } as const, '') // per Bash call: its command
+const ANIMATE_MS = 1500 // a card's rows rise in during its first moments only
+const MAX_SEEN = 500
 const EDITS = new Set(['Edit', 'Write', 'MultiEdit'])
 
 type Active = { skin: Skin; p: Palette }
@@ -219,66 +216,142 @@ async function skinsPage($: EngineInterface, e: RenderInput<'Pane'>, columns: nu
   )
 }
 
-// ── claude-skins' renderers, fed this skin ──
+// ── drawing on the desktop ──
 
-// A hex color `t` of the way from `a` to `b`.
-const mix = (a: string, b: string, t: number): string => {
-  const ch = (h: string, i: number) => parseInt(h.slice(1 + i * 2, 3 + i * 2), 16)
-  return `#${[0, 1, 2].map(i => Math.round(ch(a, i) + (ch(b, i) - ch(a, i)) * t).toString(16).padStart(2, '0')).join('')}`
-}
-
-// This skin's palette as claude-skins' colour slots: each kind of tool in the colour
-// the terminal rows use, the table bands faint tints of the text over the background.
-const slots = (p: Palette): SlotPalette => ({
-  read: p.blue,
-  write: p.yellow,
-  run: p.green,
-  search: p.purple,
-  web: p.cyan,
-  mcp: p.pink,
-  other: p.text,
-  user: p.accent,
-  fg: p.text,
-  muted: p.muted,
-  surface: mix(p.bg, p.text, 0.14),
-  zebra: mix(p.bg, p.text, 0.07),
-  ok: p.green,
-  err: p.red,
-  warn: p.yellow,
-})
-
-const PREFS = { skin: '', icons: 'unicode', rail: false, tables: true, shimmer: false, band: false, clipOutput: false } as const
-
-type LookInput =
+type DrawInput =
   | RenderInput<'AssistantMessage'>
   | RenderInput<'ToolResult'>
   | RenderInput<'ToolUse'>
   | RenderInput<'ToolGroup'>
   | RenderInput<'Spinner'>
-  | RenderInput<'UserMessage'>
 
-// What claude-skins' row builders draw with: this surface's elements (its Svg on the
-// desktop), the skin, and a Copy that puts text on this surface's clipboard.
-function lookOf($: EngineInterface, e: LookInput, a: Active): Look {
-  const ui = $.ui.resolve(e)
-  const copy = (text: string) =>
-    void $.ui.copy({ text, surface: e.surface }).then(r => $.ui.toast(r.isCopied ? 'Copied' : 'Could not copy here'))
-  return {
-    ui,
-    skin: { name: a.skin.id, label: a.skin.label, palette: slots(a.p), spinner: a.skin.words, done: a.skin.done },
-    icons: ICONS.unicode,
-    prefs: { ...PREFS, skin: a.skin.id },
-    surface: e.surface,
-    ...(e.surface !== 'terminal' && 'Svg' in ui ? { svg: ui.Svg } : {}),
-    copy,
+// When each card was first drawn. A redraw (a resize, the side panel opening) is drawn
+// still, so the rows rise in once.
+// ponytail: module memory, starts over on reload; capped at MAX_SEEN keys
+const firstSeen = new Map<string, number>()
+
+async function isNew($: EngineInterface, key: string): Promise<boolean> {
+  const now = await $.clock.now()
+  const seen = firstSeen.get(key)
+  if (seen !== undefined) return now - seen < ANIMATE_MS
+  firstSeen.set(key, now)
+  if (firstSeen.size > MAX_SEEN) firstSeen.delete(firstSeen.keys().next().value ?? key)
+  return true
+}
+
+function copyText($: EngineInterface, e: DrawInput, text: string): void {
+  void $.ui.copy({ text, surface: e.surface }).then(r => $.ui.toast(r.isCopied ? 'Copied' : 'Could not copy here'))
+}
+
+// A card image, and a Copy under it (an image's text cannot be selected).
+function cardTree($: EngineInterface, e: DrawInput, c: Card, copy: string, key: string) {
+  if (e.surface === 'terminal') return null
+  const { Box, Button, Svg } = $.ui.resolve(e)
+  return (
+    <Box key={`card-${key}`} flexDirection="column" marginY={1} alignSelf="flex-start">
+      <Svg source={c.source} alt={c.alt} width={c.width} height={c.height} />
+      <Box justifyContent="flex-end">
+        <Button key={`copy-${key}`} plain dimColor label="Copy" onPress={() => copyText($, e, copy)} />
+      </Box>
+    </Box>
+  )
+}
+
+// A table on the terminal: an outline, the column names in the accent, the cells lined up.
+function tableGrid($: EngineInterface, e: RenderInput<'AssistantMessage'>, p: Palette, t: Table) {
+  const { Box, Text } = $.ui.resolve(e)
+  const room = Math.max(20, (e.viewport?.columns ?? 100) - 8)
+  const natural = t.header.map((h, c) => Math.max([...h].length, ...t.rows.map(r => [...(r[c] ?? '')].length)))
+  const scale = Math.min(1, (room - 2 * (natural.length - 1)) / Math.max(1, natural.reduce((a, b) => a + b, 0)))
+  const widths = natural.map(w => Math.max(3, Math.floor(w * scale)))
+  const cell = (v: string, w: number) => ([...v].length > w ? `${[...v].slice(0, w - 1).join('')}…` : v.padEnd(w))
+  const line = (r: string[]) => r.map((v, c) => cell(v, widths[c] ?? 3)).join('  ')
+  return (
+    <Box flexDirection="column" borderStyle="round" borderColor={p.muted} paddingX={1} alignSelf="flex-start">
+      <Text color={p.accent} bold>
+        {line(t.header)}
+      </Text>
+      {t.rows.map((r, i) => (
+        <Text key={`row-${i}`} color={p.text}>
+          {line(r)}
+        </Text>
+      ))}
+    </Box>
+  )
+}
+
+const KIND_NAME: Record<Kind, string> = { read: 'Read', write: 'Edit', run: 'Run', search: 'Search', web: 'Web', mcp: 'MCP' }
+
+// How long a call took: `0.4s`, `12s`, `1m 4s`.
+const took = (ms: number): string => (ms < 10_000 ? `${(ms / 1000).toFixed(1)}s` : duration(ms))
+
+type CallState = { isRunning: boolean; isErrored: boolean; isInterrupted: boolean }
+
+// A call's mark colour: red when it failed, muted while it runs or once interrupted.
+const stateColor = (p: Palette, kind: Kind, s: CallState) => (s.isErrored ? p.red : s.isRunning || s.isInterrupted ? p.muted : kindColor(p, kind))
+
+// A tool row on the desktop: its icon, the tool, what it touched, lines changed and time taken.
+function toolRowTree($: EngineInterface, e: RenderInput<'ToolUse'>, p: Palette, kind: Kind, target: string, meta: { ms?: number; added?: number; removed?: number }) {
+  if (e.surface === 'terminal') return null
+  const { Box, Svg, Text } = $.ui.resolve(e)
+  const s = e.props
+  return (
+    <Box flexDirection="row" columnGap={1} alignItems="center">
+      <Svg source={toolIcon(kind, stateColor(p, kind, s), s.isRunning)} alt={KIND_NAME[kind]} width={16} height={16} />
+      <Text wrap="truncate-end">
+        <Text color={kindColor(p, kind)} bold>
+          {toolLabel(s.tool)}
+        </Text>
+        {target ? <Text color={s.isErrored ? p.red : p.muted}>{`  ${target}`}</Text> : null}
+        {meta.added || meta.removed ? <Text color={p.green}>{`   +${meta.added ?? 0}`}</Text> : null}
+        {meta.added || meta.removed ? <Text color={p.red}>{` −${meta.removed ?? 0}`}</Text> : null}
+        {meta.ms !== undefined ? <Text color={p.muted}>{`   ${took(meta.ms)}`}</Text> : null}
+        {s.isInterrupted ? <Text color={p.muted}> · interrupted</Text> : null}
+      </Text>
+    </Box>
+  )
+}
+
+// A run of calls folded into one row on the desktop: `Run 2 · Read 3` beside the icon of the most frequent.
+function groupRowTree($: EngineInterface, e: RenderInput<'ToolGroup'>, p: Palette) {
+  if (e.surface === 'terminal') return null
+  const kinds = e.props.calls.map(c => kindOf(c.tool)).filter((k): k is Kind => k !== null)
+  const counts = [...new Set(kinds)].map(k => [k, kinds.filter(x => x === k).length] as const).sort((a, b) => b[1] - a[1])
+  const lead = counts[0]?.[0]
+  if (!lead) return null
+  const state = {
+    isRunning: e.props.calls.some(c => c.isRunning),
+    isErrored: e.props.calls.some(c => c.isErrored),
+    isInterrupted: e.props.calls.some(c => c.isInterrupted),
   }
+  const { Box, Svg, Text } = $.ui.resolve(e)
+  return (
+    <Box flexDirection="row" columnGap={1} alignItems="center">
+      <Svg source={toolIcon(lead, stateColor(p, lead, state), state.isRunning)} alt={KIND_NAME[lead]} width={16} height={16} />
+      <Text wrap="truncate-end">
+        {counts.map(([k, n], i) => (
+          <Text key={`kind-${k}`}>
+            {i > 0 ? <Text color={p.muted}> · </Text> : null}
+            <Text color={kindColor(p, k)} bold>
+              {KIND_NAME[k]}
+            </Text>
+            <Text color={p.muted}>{` ${n}`}</Text>
+          </Text>
+        ))}
+      </Text>
+    </Box>
+  )
 }
 
 // A reply's blocks in the skin's colors; code and tables as cards.
-function replyBlocks($: EngineInterface, e: RenderInput<'AssistantMessage'>, a: Active, blocks: readonly Block[]) {
+async function replyBlocks($: EngineInterface, e: RenderInput<'AssistantMessage'>, a: Active, blocks: readonly Block[]) {
   const { p } = a
-  const look = lookOf($, e, a)
-  const { Box, Code, Link, Markdown, Text } = $.ui.resolve(e)
+  const width = cardWidth(e.viewport?.columns)
+  // Which of the desktop's cards are new, so only they rise in.
+  const fresh = await Promise.all(
+    blocks.map((b, i) => (e.surface !== 'terminal' && (b.kind === 'code' || b.kind === 'markdown') ? isNew($, `${e.requestId}:${i}`) : false)),
+  )
+  const { Box, Code, Link, Markdown, Text, Button } = $.ui.resolve(e)
   const spans = (list: readonly Inline[], key: string, color: string) =>
     list.map((s, i) =>
       s.kind === 'link' && s.href ? (
@@ -289,7 +362,7 @@ function replyBlocks($: EngineInterface, e: RenderInput<'AssistantMessage'>, a: 
         </Text>
       ),
     )
-  const draw = (b: Block, k: string) => {
+  const draw = (b: Block, k: string, i: number) => {
     switch (b.kind) {
       case 'heading':
         return (
@@ -317,28 +390,31 @@ function replyBlocks($: EngineInterface, e: RenderInput<'AssistantMessage'>, a: 
           </Box>
         )
       case 'code':
-        // The desktop: claude-skins' code card. The terminal: Claude Code's highlighter, and a Copy.
-        if (look.svg) return codeCard(look, b.lang, b.code, look.svg, e.viewport?.columns ?? 100, `copy-${k}`)
+        // The desktop: a code card. The terminal: Claude Code's highlighting, and a Copy under it.
+        if (e.surface !== 'terminal') return cardTree($, e, codeSvg(b.lang, b.code, p, width, fresh[i] === true), b.code, k)
         return (
           <Box flexDirection="column">
             <Code source={b.code} {...(b.lang ? { language: b.lang } : {})} />
-            {copyRow(look, `copy-${k}`, b.code)}
+            <Box justifyContent="flex-end">
+              <Button key={`copy-${k}`} plain dimColor label="Copy" onPress={() => copyText($, e, b.code)} />
+            </Box>
           </Box>
         )
       case 'rule':
         return <Text color={p.muted}>{'─'.repeat(24)}</Text>
       case 'markdown': {
-        // A table: claude-skins' animated card on the desktop, its cell grid on the terminal.
-        const table = splitReply(b.text).find(seg => seg.kind === 'table')
-        if (!table || table.kind !== 'table') return <Markdown text={b.text} />
-        return look.svg ? replyRows(look, [table], e.viewport?.columns ?? 100, look.svg) : tableRows(look, table, e.viewport?.columns ?? 100)
+        // A table: a card on the desktop, an outlined grid on the terminal.
+        const table = tableOf(b.text)
+        if (!table) return <Markdown text={b.text} />
+        if (e.surface !== 'terminal') return cardTree($, e, tableSvg(table, p, width, fresh[i] === true), b.text, k)
+        return tableGrid($, e, p, table)
       }
     }
   }
   // A blank line between blocks, none between the items of one list.
   return blocks.map((b, i) => (
     <Box key={`block-${i}`} marginTop={i > 0 && !(b.kind === 'item' && blocks[i - 1]?.kind === 'item') ? 1 : 0}>
-      {draw(b, `block-${i}`)}
+      {draw(b, `block-${i}`, i)}
     </Box>
   ))
 }
@@ -413,17 +489,25 @@ export const register: Register = on => {
     return stored
   }).catch(($, e, next) => next(e))
 
-  // Your prompt in a rounded outline sized to what you typed (claude-skins' prompt row).
+  // Your prompt in the skin's colour, in a rounded outline sized to what you typed.
   on('ui.render', { component: 'UserMessage' }, async ($, e, next) => {
     const a = await active($)
     if (!a || !TYPED.has(e.props.origin.kind) || e.props.text.length > MAX_PROMPT || (await read($, memberOf(hasImages, e)))) {
       return next(e)
     }
-    return promptRow(lookOf($, e, a), e.props.text)
+    const { Box, Text } = $.ui.resolve(e)
+    return (
+      <Box flexDirection="column" alignItems="flex-start" marginY={1}>
+        <Box borderStyle="round" borderColor={a.p.muted} paddingX={1} flexShrink={1}>
+          <Text color={a.p.text}>{e.props.text}</Text>
+        </Box>
+      </Box>
+    )
   })
 
-  // Times every call, for the row's "how long it took".
+  // Times every call, for its row; keeps a shell call's command, for its terminal card.
   on('tool.call', async ($, e, next) => {
+    if (e.tool === 'Bash') await update($, memberOf(commandOf, { requestId: e.tool_use_id }), () => e.command)
     const startedAt = await $.clock.now()
     const ran = await next(e)
     const ms = (await $.clock.now()) - startedAt
@@ -431,24 +515,22 @@ export const register: Register = on => {
     return ran
   }).catch(($, e, next) => next(e))
 
-  // A tool row. The desktop: claude-skins' row, a line icon for its kind (a ring while it
-  // runs), the tool, its target, lines changed and time taken. The terminal: a plain row.
+  // A tool row: on the desktop its icon, the tool, its target, lines changed and time
+  // taken; on the terminal the tool and its target.
   on('ui.render', { component: 'ToolUse' }, async ($, e, next) => {
-    const kind = rowKind(e.props.tool)
+    const kind = kindOf(e.props.tool)
     const a = kind ? await active($) : null
     if (!kind || !a) return next(e)
-    const cwd = await $.session.cwd()
+    const { p } = a
+    const target = targetOf(e.props.tool, e.props.input, await $.session.cwd())
     if (e.surface !== 'terminal') {
       const ms = await read($, memberOf(tookMs, e))
-      const diff = diffstat(e.props.output)
-      const meta = { ...(ms >= 0 && !e.props.isRunning ? { ms } : {}), ...(diff ?? {}) }
-      return toolRow(lookOf($, e, a), e.props as Call, kind, summarize(e.props.tool, e.props.input, cwd), meta)
+      const diff = diffOf(e.props.output)
+      const meta = { ...(ms >= 0 && !e.props.isRunning ? { ms } : {}), ...(diff ? { added: diff.added, removed: diff.removed } : {}) }
+      return toolRowTree($, e, p, kind, target, meta) ?? next(e)
     }
     const { Text } = $.ui.resolve(e)
-    const { p } = a
-    const color = kindColor(p, kindOf(e.props.tool) ?? 'mcp')
-    const labelColor = e.props.isRunning || e.props.isInterrupted ? p.muted : e.props.isErrored ? p.red : color
-    const target = targetOf(e.props.tool, e.props.input, cwd)
+    const labelColor = stateColor(p, kind, e.props)
     return (
       <Text wrap="truncate-end">
         <Text color={labelColor} bold>
@@ -460,30 +542,28 @@ export const register: Register = on => {
     )
   })
 
-  // A run of calls the transcript folds into one line: claude-skins' group row on the
-  // desktop (`Read 3 · Run 2` beside an icon), Claude Code's own on the terminal.
+  // A run of calls folded into one line: our row on the desktop, Claude Code's on the terminal.
   on('ui.render', { component: 'ToolGroup' }, async ($, e, next) => {
     const a = e.surface !== 'terminal' && !e.props.isExpanded ? await active($) : null
-    if (!a) return next(e)
-    return groupRow(lookOf($, e, a), e.props.calls as readonly Call[])
+    return (a && groupRowTree($, e, a.p)) ?? next(e)
   })
 
-  // On the desktop, an edit's result as claude-skins' diff card and a shell command's as
-  // its terminal card. The terminal keeps Claude Code's own diff and output.
+  // On the desktop, an edit's result as a diff card and a shell command's in a terminal
+  // card. The terminal keeps Claude Code's own diff and output.
   on('ui.render', { component: 'ToolResult' }, async ($, e, next) => {
     const a = e.surface !== 'terminal' ? await active($) : null
-    const look = a ? lookOf($, e, a) : null
-    if (!look?.svg) return next(e)
-    const columns = e.viewport?.columns ?? 100
-    if (EDITS.has(e.props.tool) && !e.props.isErrored) {
-      const diff = hunksOf(e.props.output)
-      if (diff) return diffCard(look, look.svg, diff, summarize(e.props.tool, { file_path: diff.path }, await $.session.cwd()), columns)
+    if (!a) return next(e)
+    const width = cardWidth(e.viewport?.columns)
+    const diff = EDITS.has(e.props.tool) && !e.props.isErrored ? diffOf(e.props.output) : null
+    if (diff) {
+      const path = targetOf('Edit', { file_path: diff.path }, await $.session.cwd())
+      const card = diffSvg(diff, path, a.p, width, await isNew($, e.requestId))
+      return cardTree($, e, card, card.alt, e.requestId) ?? next(e)
     }
-    if (e.props.tool === 'Bash') {
-      const shell = shellOutputOf(e.props.output)
-      if (shell) return terminalCard(look, look.svg, shell, e.props.isErrored, columns)
-    }
-    return next(e)
+    const shell = e.props.tool === 'Bash' ? shellOf(e.props.output, await read($, memberOf(commandOf, e)), e.props.isErrored) : null
+    if (!shell) return next(e)
+    const output = [shell.stdout, shell.stderr].filter(t => t.trim() !== '').join('\n')
+    return cardTree($, e, terminalSvg(shell, a.p, width, await isNew($, e.requestId)), output, e.requestId) ?? next(e)
   })
 
   // A reply in the skin's colors, block by block. A summary row keeps Claude Code's.
@@ -493,18 +573,23 @@ export const register: Register = on => {
     const { Box, Text } = $.ui.resolve(e)
     return (
       <Box flexDirection="column" flexGrow={1} flexShrink={1}>
-        {replyBlocks($, e, a, parseBlocks(e.props.text))}
+        {await replyBlocks($, e, a, parseBlocks(e.props.text))}
       </Box>
     )
   })
 
   // The spinner keeps Claude Code's line (time, tokens) and says the skin's word.
-  // The desktop: claude-skins' animated icon for what the turn is doing, beside the step the app names.
+  // The desktop: a moving mark for what the turn is doing, beside the step the app names.
   on('ui.render', { component: 'Spinner' }, async ($, e, next) => {
     const a = await active($)
     if (a && e.surface !== 'terminal') {
-      const look = lookOf($, e, a)
-      return look.svg ? desktopSpinnerRow(look, look.svg, e.props.mode, e.props.message ?? e.props.word) : next(e)
+      const { Box, Svg, Text } = $.ui.resolve(e)
+      return (
+        <Box flexDirection="row" columnGap={1} alignItems="center">
+          <Svg source={phaseIcon(e.props.mode as Phase, a.p.accent)} alt={e.props.mode} width={18} height={18} />
+          <Text color={a.p.muted}>{e.props.message ?? e.props.word}</Text>
+        </Box>
+      )
     }
     if (!a || e.props.message !== null) return next(e)
     return next({ ...e, props: { ...e.props, word: pick(a.skin.words, e.props.word) } })

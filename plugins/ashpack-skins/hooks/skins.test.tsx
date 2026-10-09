@@ -182,7 +182,7 @@ test('dark or light: the switch picks the palette and Claude Code\'s theme; a pr
   for (const surface of SURFACES) {
     const row = await $.ui.mount({ plugin: 'ashpack-skins', surface, component: 'UserMessage', props: prompt })
     const drawn = JSON.stringify(await row.drawn())
-    // claude-skins' prompt row: the text in the skin's colour, in a rounded outline, no fill.
+    // The prompt in the skin's colour, in a rounded outline, no fill.
     expect(drawn).toContain(nord.light.text)
     expect(drawn).toContain('"borderStyle":"round"')
     expect(drawn).not.toContain('backgroundColor')
@@ -195,6 +195,7 @@ test('dark or light: the switch picks the palette and Claude Code\'s theme; a pr
 
 test('a reply draws in the skin\'s colors, with code and tables as cards', async ($, on) => {
   mock.store(on)
+  mock.clock(on, { now: 0 })
   on('config.list', () => ({ value: [{ key: 'theme', value: 'dark' }] }) as never)
   on('ui.render', { component: 'AssistantMessage' }, ($, e) => {
     const { Text } = $.ui.resolve(e)
@@ -212,14 +213,14 @@ test('a reply draws in the skin\'s colors, with code and tables as cards', async
     for (const part of ['Plan', p.accent, p.text, p.cyan, 'let x = 1']) expect(drawn).toContain(part)
     expect(drawn).not.toContain('engine-reply')
     if (surface === 'terminal') {
-      // The code in Claude Code's highlighter with a Copy; the table as claude-skins' cell grid.
+      // The code in Claude Code's highlighter with a Copy; the table as an outlined grid.
       expect(drawn).toContain('"type":"Code"')
       expect(drawn).toContain('"key":"copy-block-4"')
       expect(drawn).toContain('"borderStyle":"round"')
     } else {
       // SVG cards whose rows rise in, each with a Copy button.
       expect(drawn).toContain('"type":"Svg"')
-      expect(drawn).toContain('@keyframes rise')
+      expect(drawn).toContain('@keyframes r')
       await reply.press({ key: 'copy-block-4' })
       expect(copied.at(-1)).toBe('let x = 1')
     }
@@ -231,9 +232,9 @@ test('a reply draws in the skin\'s colors, with code and tables as cards', async
   }
 })
 
-test('the desktop draws claude-skins\' tool rows, group rows, diff and terminal cards, and spinner', async ($, on) => {
+test('the desktop draws tool rows, group rows, diff and terminal cards, and a moving mark for the turn', async ($, on) => {
   mock.store(on)
-  mock.clock(on, { now: 0 })
+  const clock = mock.clock(on, { now: 0 })
   on('config.list', () => ({ value: [{ key: 'theme', value: 'dark' }] }) as never)
   on('session.cwd', () => ({ value: '/repo' }) as never)
   on('ui.render', { component: ['ToolResult', 'ToolUse', 'ToolGroup', 'Spinner'] }, ($, e) => {
@@ -247,8 +248,8 @@ test('the desktop draws claude-skins\' tool rows, group rows, diff and terminal 
     structuredPatch: [{ oldStart: 3, oldLines: 2, newStart: 3, newLines: 2, lines: [' const a = 1', '-const b = 2', '+const b = 3'] }],
   }
   const shell = { stdout: 'ok 3 tests', stderr: 'warn: slow', interrupted: false }
-  const mount = (surface: 'terminal' | 'desktop', component: string, props: unknown) =>
-    $.ui.mount({ plugin: 'ashpack-skins', surface, component, props, viewport: { columns: 120, rows: 40 } } as never)
+  const mount = (surface: 'terminal' | 'desktop', component: string, props: unknown, requestId?: string) =>
+    $.ui.mount({ plugin: 'ashpack-skins', surface, component, props, viewport: { columns: 120, rows: 40 }, ...(requestId ? { requestId } : {}) } as never)
   const drawnOf = async (ui: Awaited<ReturnType<typeof mount>>) => {
     const d = JSON.stringify(await ui.drawn())
     await ui.unmount()
@@ -275,8 +276,13 @@ test('the desktop draws claude-skins\' tool rows, group rows, diff and terminal 
   for (const part of ['"type":"Svg"', 'Run', ' 2']) expect(group).toContain(part)
   expect(await drawnOf(await mount('terminal', 'ToolGroup', { calls, isActive: false, isExpanded: false }))).toContain('engine-ToolGroup')
 
-  const diff = await drawnOf(await mount('desktop', 'ToolResult', { tool_use_id: 'e1', tool: 'Edit', output: edit, isErrored: false }))
-  for (const part of ['"type":"Svg"', 'src/auth.ts', 'const b = 3']) expect(diff).toContain(part)
+  const diff = await drawnOf(await mount('desktop', 'ToolResult', { tool_use_id: 'e1', tool: 'Edit', output: edit, isErrored: false }, 'e1'))
+  for (const part of ['"type":"Svg"', 'src/auth.ts', 'const b = 3', '+1 −1', '@keyframes r']) expect(diff).toContain(part)
+  // A card's rows rise in when it is new; a redraw later (a resize, the side panel opening) is drawn still.
+  await clock.advance(2000)
+  const again = await drawnOf(await mount('desktop', 'ToolResult', { tool_use_id: 'e1', tool: 'Edit', output: edit, isErrored: false }, 'e1'))
+  expect(again).toContain('const b = 3')
+  expect(again).not.toContain('@keyframes')
   const term = await drawnOf(await mount('desktop', 'ToolResult', { tool_use_id: 'b1', tool: 'Bash', output: shell, isErrored: false }))
   for (const part of ['"type":"Svg"', 'ok 3 tests', 'warn: slow', '"label":"Copy"']) expect(term).toContain(part)
   // The terminal keeps Claude Code's own diff and output.

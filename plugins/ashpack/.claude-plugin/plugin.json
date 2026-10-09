@@ -1,6 +1,6 @@
 {
   "name": "ashpack",
-  "version": "0.8.6",
+  "version": "0.8.7",
   "description": "AshPack: colored status rows, compact mode with a working popup, and a side-panel drawer where each mod has its own page.",
   "author": {
     "name": "Ashish S Kumar"

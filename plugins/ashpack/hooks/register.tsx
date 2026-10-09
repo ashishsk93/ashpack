@@ -236,6 +236,13 @@ async function drawPopup($: EngineInterface, e: RenderInput<'AbovePrompt'>, a: A
   )
 }
 
+// A row compact mode leaves out: dropped on the terminal, empty on the desktop app (which
+// draws its own row for a `display: none` answer).
+function emptyRow($: EngineInterface, e: RenderInput<'ToolUse'> | RenderInput<'ToolResult'> | RenderInput<'ToolGroup'>) {
+  const { Box } = $.ui.resolve(e)
+  return e.surface === 'terminal' ? <Box display="none" /> : <Box />
+}
+
 // ── drawer ───────────────────────────────────────────────────────────────────
 
 // The pack's mods: its marketplace's catalog, against what is installed and on.
@@ -312,7 +319,7 @@ function homePage($: EngineInterface, e: PaneInput, isCompactOn: boolean, isStat
   const { Box, Text } = $.ui.resolve(e)
   return (
     <Box key="page-home" flexDirection="column" rowGap={1}>
-      {settingRow($, e, 'compact', 'Compact mode', COMPACT_HINT[e.surface === 'terminal' ? 'terminal' : 'app'], isCompactOn, () => toggle($, 'compact'))}
+      {settingRow($, e, 'compact', 'Compact mode', 'Tool rows fold away; a popup above the prompt shows the work.', isCompactOn, () => toggle($, 'compact'))}
       {settingRow($, e, 'status', 'Status rows', 'Model, branch, context and usage by the prompt.', isStatusOn, () => toggle($, 'statusOn'))}
       <Text dimColor>
         {pages.length > 0
@@ -323,12 +330,6 @@ function homePage($: EngineInterface, e: PaneInput, isCompactOn: boolean, isStat
   )
 }
 
-// The desktop app draws tool calls itself (its "Ran 2 commands" groups) and ignores a mod's
-// drawing of them, so there compact mode adds the popup and leaves the groups to the app.
-const COMPACT_HINT = {
-  terminal: 'Tool rows fold away; a popup above the prompt shows the work.',
-  app: 'Adds the work popup above the prompt. The app keeps its own tool groups.',
-} as const
 
 const ACTION: Record<PackMod['state'], string> = { on: 'turn off', off: 'turn on', missing: 'install' }
 const STATE: Record<PackMod['state'], [string, string | undefined]> = { on: ['●', COLORS.ok], off: ['○', undefined], missing: ['+', undefined] }
@@ -486,24 +487,21 @@ export const register: Register = on => {
   }).catch(($, e, next) => next(e))
 
   // ── compact mode: hidden rows (an invisible Box); ctrl+o still shows all ──
-  // The desktop app draws its own tool rows and ignores a hidden one, so there the rows
-  // pass on (to a skin that draws them) rather than stop here.
+  // Compact mode: no tool rows. The terminal drops the row (display none); the desktop
+  // app draws its own row for a `display: none` answer, so there it gets an empty one.
   on('ui.render', { component: 'ToolUse' }, async ($, e, next) => {
-    if (e.surface !== 'terminal' || !(await isCompact($))) return next(e)
-    const { Box } = $.ui.resolve(e)
-    return <Box display="none" />
+    if (!(await isCompact($))) return next(e)
+    return emptyRow($, e)
   })
 
   on('ui.render', { component: 'ToolResult' }, async ($, e, next) => {
-    if (e.surface !== 'terminal' || !(await isCompact($))) return next(e)
-    const { Box } = $.ui.resolve(e)
-    return <Box display="none" />
+    if (!(await isCompact($))) return next(e)
+    return emptyRow($, e)
   })
 
   on('ui.render', { component: 'ToolGroup' }, async ($, e, next) => {
-    if (e.surface !== 'terminal' || e.props.isExpanded || !(await isCompact($))) return next(e)
-    const { Box } = $.ui.resolve(e)
-    return <Box display="none" />
+    if (e.props.isExpanded || !(await isCompact($))) return next(e)
+    return emptyRow($, e)
   })
 
   on('ui.render', { component: 'ToolProgress' }, async ($, e, next) =>

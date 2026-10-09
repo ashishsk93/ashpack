@@ -163,8 +163,11 @@ test('the drawer\'s Home page toggles compact mode and status rows; compact mode
       component: 'ToolUse',
       props: { tool_use_id: 't1', tool: 'Bash', input: { command: 'ls' }, isRunning: false, isErrored: false, isInterrupted: false },
     })
-    // The terminal hides the row; the desktop app draws its own, so the row passes on there.
-    expect(JSON.stringify(await row.drawn())).toContain(surface === 'terminal' ? '"display":"none"' : 'engine-row')
+    // Compact mode leaves the row out: dropped on the terminal, an empty row on the desktop.
+    const hidden = JSON.stringify(await row.drawn())
+    expect(hidden).not.toContain('engine-row')
+    if (surface === 'terminal') expect(hidden).toContain('"display":"none"')
+    else expect(hidden).not.toContain('display')
 
     await panel.press({ key: 'compact' })
     await panel.press({ key: 'status' })
