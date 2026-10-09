@@ -8,12 +8,12 @@
     {
       "name": "ashpack",
       "source": "./plugins/ashpack",
-      "description": "Status line, compact mode and the AshPack menu."
+      "description": "Status line, compact mode, and the AshPack drawer: a side panel with a page per mod."
     },
     {
       "name": "ashpack-skins",
       "source": "./plugins/ashpack-skins",
-      "description": "Skins: the prompt, tool rows, spinner and turn footer redrawn in twelve palettes. Pick one with /skin or the Skins button."
+      "description": "Skins: prompts, replies, tool rows, spinner and turn footer redrawn in twelve palettes, dark or light. Pick one on the Skins page of the AshPack drawer, or with /skin."
     }
   ]
 }

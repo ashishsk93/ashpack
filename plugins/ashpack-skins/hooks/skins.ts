@@ -132,6 +132,12 @@ export const paletteOf = (skin: Skin, isLight: boolean): Palette => (isLight ? s
 // ponytail: `auto` reads as dark; ask the terminal's background if light users hit it
 export const isLightTheme = (value: unknown): boolean => typeof value === 'string' && value.includes('light')
 
+// Claude Code's built-in theme for a mode, keeping a daltonized or ANSI variant: dark-ansi -> light-ansi.
+export const themeFor = (current: unknown, isLight: boolean): string => {
+  const variant = typeof current === 'string' ? (/^(?:dark|light)(-daltonized|-ansi)$/.exec(current)?.[1] ?? '') : ''
+  return `${isLight ? 'light' : 'dark'}${variant}`
+}
+
 // A word from `list` that stays the same for the same `seed`, so a row never flickers.
 export const pick = (list: string[], seed: string): string => {
   let h = 0

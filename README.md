@@ -13,21 +13,48 @@ Personal Claude Code mods. This repo is a plugin marketplace; each mod lives in 
 
   `●` changed files, `↑`/`↓` ahead/behind, `↻` time to reset. Bars are green below 60%, yellow below 85% and red from 85%. Outside fullscreen the line under the prompt holds one row only, so the grid sits directly above the prompt there.
 - **Compact mode**: hides tool calls, tool groups, progress pills and the spinner. Replies stay. While Claude works, a popup above the prompt (half the width) shows the elapsed time and one row for each section of the work, at most five. The sections are Claude's task list when it keeps one. Otherwise they are the last three finished steps (for example `✓ Reading format.ts`) and the running step. Finished rows have `✓`, waiting rows `○`, and the running row `▸` with a loader beside it: a block with a fading trail that crosses a dotted track (`···░▒▓██····`). The desktop app draws the loader as an animated image and leaves out the elapsed time. Press ctrl+o to see everything.
-- **Drawer**: the footer shows only `◆ AshPack ▸`. Click it: a small card floats above it with one tab for each mod that draws in the footer (AshPack first, then for example baton). Each tab shows that mod's own badges and buttons, and the AshPack tab holds the toggles (compact mode, status rows). The Mods tab lists the mods of this pack: `●` on, `○` off, `+` not installed. Click one to turn it on or off, or to install it. Click `↻ update` to update the pack. After a change, AshPack puts `/reload-plugins` in the prompt box; press Enter to apply it. Use `‹` `›` or click a tab name to switch tabs. Click `◂` or `✕` to close. Outside fullscreen, and in the desktop app, the other mods' badges slide out in the footer and a small pane holds the toggles and the mods (Esc closes). Also `/ashpack`, `/ashpack compact`, `/ashpack status`.
+- **Drawer**: click `◆ AshPack ▸` in the footer, or run `/ashpack`. A side panel opens, docked beside the transcript in the desktop app and in a fullscreen terminal (inline above the prompt on the terminal's main screen). It has one page per tab:
+  - **Home**: the switches for compact mode and status rows.
+  - **A page for each mod that supports AshPack**, for example **Skins** and **Baton**. These mods leave the footer, so they do not compete for its space. Mods without a page keep their footer badges.
+  - **Mods**: the mods of this pack, `●` on, `○` off, `+` not installed. Click `turn on`, `turn off` or `install`, or `↻ update all`. After a change, AshPack puts `/reload-plugins` in the prompt box; press Enter to apply it.
+
+  `/ashpack <page>` opens the panel on a page (`/ashpack skins`). `/ashpack compact` and `/ashpack status` flip a switch. Esc closes the panel.
+
+### Give your mod a page in the drawer
+
+Any mod can have a page. Hook the drawer's pane (id `ashpack`), keep the tree of the mods beneath you, and add one Box keyed `ashpack-page:<Label>`:
+
+```tsx
+on('ui.render', { component: 'Pane', requestId: 'ashpack' }, async ($, e, next) => {
+  const below = await next(e) // the pages of the mods after yours
+  const { Box, Text } = $.ui.resolve(e)
+  return (
+    <Box flexDirection="column">
+      {below}
+      <Box key="ashpack-page:Hello" flexDirection="column">
+        <Text>Your page: any tree, Buttons included.</Text>
+      </Box>
+    </Box>
+  )
+})
+```
+
+AshPack draws the page when its tab is open; its Buttons run your own handlers. Always return `below`, or the pages of the mods after yours are lost. To leave the footer while AshPack is on, read `enabledPlugins["ashpack@ashpack"]` with `$.settings.read()` at session start, and then `return next(e)` from your `SessionMode` hook.
 
 ### Plugin order
 
-Claude Code runs the plugins of the user tier in the order of `enabledPlugins` in `~/.claude/settings.json`. The first entry runs first (outermost). The drawer can hold other mods only if `"ashpack@ashpack"` is the first entry. AshPack shows a toast at session start when it is not.
+Claude Code runs the plugins of the user tier in the order of `enabledPlugins` in `~/.claude/settings.json`. The first entry runs first (outermost). The drawer finds the other mods' pages only if `"ashpack@ashpack"` is the first entry. AshPack shows a toast at session start when it is not.
 
 ## ashpack-skins
 
-Twelve skins: Catppuccin, Dracula, Nord, Gruvbox, Tokyo Night, Rosé Pine, Solarized, One, Everforest, GitHub, Kanagawa and Monokai. A skin redraws your prompts, the tool rows, the spinner's words and the turn footer in its colors. It uses only Box and Text, so the terminal and the desktop app's Code tab draw the same. The picker's pixel-art title is an image in the desktop app. The stored conversation, and what the model reads, do not change.
+Twelve skins: Catppuccin, Dracula, Nord, Gruvbox, Tokyo Night, Rosé Pine, Solarized, One, Everforest, GitHub, Kanagawa and Monokai. A skin redraws your prompts, Claude's replies (headings, lists, inline code and links; tables and code blocks keep Claude Code's highlighting), the tool rows, the spinner's words and the turn footer in its colors. The stored conversation, and what the model reads, do not change.
 
-To open the picker in the side panel, run `/skin`, or open the AshPack tray and press **◐ Skins** on its `skins` tab. The panel shows one mock card for each skin. Click a card (in the desktop app, the skin's name above the card) or press its key to apply it. The **ON/OFF** toggle at the top (key `0`) turns skins off and back on and keeps your pick. `/skin <name>`, `/skin on` and `/skin off` work without the panel. Your choice is kept across sessions.
+The picker is the **Skins** page of the AshPack drawer: run `/skin`, or open the drawer and click **Skins**. Without AshPack, `/skin` opens it in a panel of its own. Click a card (in the desktop app, the skin's name above the card) or press its key to apply it. Two switches sit above the cards:
 
-Each skin has a dark and a light palette. The skin follows your `/theme`: a theme with "light" in its name gets the light palette.
+- **● ON / ○ OFF** (key `0`) turns skins off and back on and keeps your pick.
+- **◐ DARK / ☀ LIGHT** (key `m`) picks the skin's dark or light palette and sets Claude Code's theme to match (`dark-ansi` becomes `light-ansi`). The desktop app keeps its own appearance (its Settings), so there each skinned row paints the skin's background instead.
 
-The Skins button lives in the footer. Put `"ashpack-skins@ashpack"` right after `"ashpack@ashpack"` in `enabledPlugins`: a mod that draws its footer badge without passing the footer on (baton does this) hides every mod listed after it.
+`/skin <name>`, `/skin on`, `/skin off`, `/skin dark` and `/skin light` work without the picker. Your choices are kept across sessions. When you change the theme with `/theme`, the skin follows it.
 
 ## Install
 

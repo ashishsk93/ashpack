@@ -1,13 +1,14 @@
 import { atom, read, update } from 'claude-code'
-import type { EngineInterface, Register, RenderInput, Timer } from 'claude-code'
+import type { EngineInterface, Register, RenderElement, RenderInput, Timer } from 'claude-code'
 
 import type { Activity, PackMod, Section, StatusData } from '../types'
-import type { Cell, Segment } from './format'
+import type { Cell, Page, Segment } from './format'
 import {
   addTask,
   around,
   COLORS,
   describeTool,
+  findPages,
   gridBarWidth,
   gridWidths,
   parseGit,
@@ -18,11 +19,8 @@ import {
   scannerSvg,
   segments,
   statusGrid,
-  stepTab,
   TRAIL,
   updateTask,
-  tabLabel,
-  without,
 } from './format'
 
 // AshPack. Everything that touches `$` lives in this one file (the engine
@@ -31,13 +29,13 @@ import {
 //     line ("auto mode on"); outside fullscreen, where that line is one row,
 //     it moves to the band above the prompt
 //   - compact mode: tool rows hidden, a working popup above the prompt
-//   - drawer: the footer shows only "◆ AshPack ▸"; opened, a small card floats
-//     above it with a tab per mod that draws in the footer (found by next.trace),
-//     each tab holding that mod's own badges. Outside fullscreen the badges
-//     slide out in the footer and a small pane holds the toggles
-// The drawer needs ashpack outermost: first in enabledPlugins (settings.json).
+//   - drawer: "◆ AshPack" in the footer opens a side pane of pages: Home (the
+//     toggles), a page for each mod that draws one into the pane, and Mods
+// The drawer needs ashpack outermost: first in enabledPlugins (settings.json),
+// so the mods' pages are in the tree its pane hook gets from `next`.
 
-const DRAWER = 'ashpack-drawer'
+const DRAWER = 'ashpack' // the drawer pane's id; mods hook its render to add a page
+const DRAWER_COLUMNS = 64
 const STATUS_TICK_MS = 30_000
 const FRAME_MS = 120
 const GRID_GAP = 2 // columns between a status section's text and the next "│"
@@ -45,12 +43,8 @@ const POPUP_ROWS = 5 // sections the working popup shows at most
 const LOADER_DOTS = 40 // the desktop loader's width, in dots
 const ACCENT = COLORS.accent
 const BLUE = COLORS.blue
-const CARD_WIDTH = 46
-const HOME_TAB = 'AshPack'
-const MODS_TAB = 'Mods'
 const PACK = 'ashpack' // the marketplace the pack's mods come from
 const CLI_TIMEOUT_MS = 120_000
-const CARD_BG = '#1e1e2e'
 const COMPACT_KEY = 'compact' // $.store keys: toggles survive sessions
 const STATUS_KEY = 'statusOn'
 
@@ -60,7 +54,7 @@ const activity = atom({ plugin: 'ashpack', key: 'activity' } as const, null as A
 const frame = atom({ plugin: 'ashpack', key: 'frame' } as const, 0)
 const status = atom({ plugin: 'ashpack', key: 'status' } as const, null as StatusData | null)
 const drawerOpen = atom({ plugin: 'ashpack', key: 'drawerOpen' } as const, false)
-const tab = atom({ plugin: 'ashpack', key: 'tab' } as const, HOME_TAB)
+const page = atom({ plugin: 'ashpack', key: 'page' } as const, 'home')
 const plan = atom({ plugin: 'ashpack', key: 'plan' } as const, [] as Section[])
 const pack = atom({ plugin: 'ashpack', key: 'pack' } as const, [] as PackMod[])
 const packBusy = atom({ plugin: 'ashpack', key: 'packBusy' } as const, null as string | null)
@@ -283,35 +277,101 @@ async function packAction($: EngineInterface, mod: PackMod | null): Promise<void
   }
 }
 
-// The fullscreen terminal's footer draws a card over the transcript. Elsewhere a
-// pane opens instead: the main screen would clip a card to the footer's one row,
-// and the desktop draws no floating card (it docks the pane in its side panel).
-async function openDrawer($: EngineInterface, isFloating: boolean): Promise<void> {
+// The drawer is a side pane on every surface (docked beside a fullscreen
+// transcript, inline above the prompt on the terminal's main screen).
+async function openDrawer($: EngineInterface, pageId?: string): Promise<void> {
+  if (pageId) await update($, page, () => pageId)
   await loadPack($)
   await update($, drawerOpen, () => true)
-  if (!isFloating) {
-    await $.ui.open({ id: DRAWER, title: 'AshPack', focus: true, closeOnEscape: true, holdToasts: true, rows: 7, columns: 48 })
-  }
+  await $.ui.open({ id: DRAWER, title: 'AshPack', focus: true, closeOnEscape: true, columns: DRAWER_COLUMNS })
 }
 
-// The pack's mods, one button each, and the pack's update button.
-// ponytail: one row of mods; past ~5 they need paging (the card has one row to give)
-function modsRow($: EngineInterface, e: RenderInput<'SessionMode'> | RenderInput<'Pane'>, mods: PackMod[], busy: string | null) {
+type PaneInput = RenderInput<'Pane'>
+
+// A toggle as a setting: its name and what it does on the left, the switch on the right.
+function settingRow($: EngineInterface, e: PaneInput, key: string, label: string, hint: string, isOn: boolean, onPress: () => unknown) {
   const { Box, Button, Text } = $.ui.resolve(e)
-  if (mods.length === 0) return <Text dimColor>No "{PACK}" marketplace found</Text>
-  const mark = (m: PackMod) => (busy === m.name ? '…' : m.state === 'on' ? '●' : m.state === 'off' ? '○' : '+')
   return (
-    <Box columnGap={2}>
-      {mods.map(m =>
-        m.name === PACK ? (
-          <Text key={`mod-${m.name}`} color={ACCENT}>
-            ◆ {m.name}
-          </Text>
-        ) : (
-          <Button key={`mod-${m.name}`} plain dimColor={m.state !== 'on'} label={`${mark(m)} ${m.name}`} onPress={() => packAction($, m)} />
-        ),
-      )}
-      <Button key="mods-update" plain dimColor label={busy === 'update' ? '… update' : '↻ update'} onPress={() => packAction($, null)} />
+    <Box key={`setting-${key}`} justifyContent="space-between" columnGap={2}>
+      <Box flexDirection="column" flexShrink={1}>
+        <Text bold>{label}</Text>
+        <Text dimColor>{hint}</Text>
+      </Box>
+      <Button key={key} plain dimColor={!isOn} label={isOn ? '● ON ' : '○ OFF'} onPress={onPress} />
+    </Box>
+  )
+}
+
+function homePage($: EngineInterface, e: PaneInput, isCompactOn: boolean, isStatusOn: boolean, pages: readonly Page[]) {
+  const { Box, Text } = $.ui.resolve(e)
+  return (
+    <Box key="page-home" flexDirection="column" rowGap={1}>
+      {settingRow($, e, 'compact', 'Compact mode', 'Tool rows fold away; a popup above the prompt shows the work.', isCompactOn, () => toggle($, 'compact'))}
+      {settingRow($, e, 'status', 'Status rows', 'Model, branch, context and usage by the prompt.', isStatusOn, () => toggle($, 'statusOn'))}
+      <Text dimColor>
+        {pages.length > 0
+          ? `Pages from your mods: ${pages.map(p => p.label).join(', ')}.`
+          : 'Mods that support AshPack show their own page here.'}
+      </Text>
+    </Box>
+  )
+}
+
+const ACTION: Record<PackMod['state'], string> = { on: 'turn off', off: 'turn on', missing: 'install' }
+const STATE: Record<PackMod['state'], [string, string | undefined]> = { on: ['●', COLORS.ok], off: ['○', undefined], missing: ['+', undefined] }
+
+// The pack's mods, one row each with what a press does, then the pack's update.
+function modsPage($: EngineInterface, e: PaneInput, mods: readonly PackMod[], busy: string | null) {
+  const { Box, Button, Text } = $.ui.resolve(e)
+  if (mods.length === 0) return <Text dimColor>No "{PACK}" marketplace found.</Text>
+  return (
+    <Box key="page-mods" flexDirection="column" rowGap={1}>
+      <Box flexDirection="column">
+        {mods.map(m => {
+          const [mark, color] = STATE[m.state]
+          return (
+            <Box key={`mod-row-${m.name}`} justifyContent="space-between" columnGap={2}>
+              <Text wrap="truncate-end">
+                <Text color={m.name === PACK ? ACCENT : color} dimColor={m.state !== 'on'}>
+                  {m.name === PACK ? '◆' : mark}
+                </Text>
+                <Text dimColor={m.state !== 'on'}> {m.name}</Text>
+              </Text>
+              {m.name === PACK ? (
+                <Text dimColor>this pack</Text>
+              ) : (
+                <Button key={`mod-${m.name}`} plain dimColor label={busy === m.name ? '…' : ACTION[m.state]} onPress={() => packAction($, m)} />
+              )}
+            </Box>
+          )
+        })}
+      </Box>
+      <Box justifyContent="space-between" columnGap={2}>
+        <Text dimColor>Changes apply after /reload-plugins.</Text>
+        <Button key="mods-update" plain label={busy === 'update' ? '… updating' : '↻ update all'} onPress={() => packAction($, null)} />
+      </Box>
+    </Box>
+  )
+}
+
+// The tab bar: a tab per page, the shown one lit and underlined (the terminal) or bright (elsewhere).
+function tabBar($: EngineInterface, e: PaneInput, tabs: readonly { id: string; label: string }[], shown: string) {
+  const { Box, Button, Text } = $.ui.resolve(e)
+  return (
+    <Box key="tabs" columnGap={2} flexWrap="wrap">
+      {tabs.map(t => {
+        const isShown = t.id === shown
+        return (
+          <Box key={`tab-${t.id}`} flexDirection="column">
+            <Button key={`page-${t.id}`} plain dimColor={!isShown} label={t.label} onPress={() => update($, page, () => t.id)} />
+            {e.surface === 'terminal' ? (
+              <Text color={isShown ? ACCENT : undefined} dimColor={!isShown}>
+                {(isShown ? '━' : '─').repeat([...t.label].length)}
+              </Text>
+            ) : null}
+          </Box>
+        )
+      })}
     </Box>
   )
 }
@@ -491,123 +551,18 @@ export const register: Register = on => {
     )
   })
 
-  // ── footer: the drawer. Closed: "◆ AshPack ▸". Open: "◂" and a card with a tab per footer mod. ──
+  // ── footer: the mods that draw here (those without a drawer page), then "◆ AshPack" ──
   on('ui.render', { component: 'SessionMode' }, async ($, e, next) => {
-    // Only the fullscreen terminal floats a card; the desktop reports fullscreen too (it docks panes).
-    const isFloating = e.surface === 'terminal' && e.viewport?.isFullscreen === true
-    const [isOpen, isCompactOn, isStatusOn, picked, mods, busy] = await Promise.all([
-      read($, drawerOpen),
-      read($, compact),
-      read($, statusOn),
-      read($, tab),
-      read($, pack),
-      read($, packBusy),
-    ])
+    const below = await next(e)
+    const isOpen = await read($, drawerOpen)
     const { Box, Button, Text } = $.ui.resolve(e)
-    const modes = e.props.modes.length > 0 ? <Text dimColor>{e.props.modes.join(' & ')}</Text> : null
-    const handle = (
-      <Box>
-        <Text color={ACCENT}>◆</Text>
-        <Button
-          key="ashpack"
-          plain
-          label={isOpen ? 'AshPack ◂' : 'AshPack ▸'}
-          onPress={() => (isOpen ? closeDrawer($) : openDrawer($, isFloating))}
-        />
-      </Box>
-    )
-    if (!isOpen) {
-      return (
-        <Box columnGap={2}>
-          {modes}
-          {handle}
-        </Box>
-      )
-    }
-    // The mods beneath draw their own badges (so their buttons work); the modes are drawn once, here.
-    const beneath = await next({ ...e, props: { ...e.props, modes: [] } })
-    if (!isFloating) {
-      return (
-        <Box columnGap={2}>
-          {modes}
-          {beneath}
-          {handle}
-        </Box>
-      )
-    }
-    // A tab per mod that drew something of its own; one that passed next's tree on draws nothing.
-    const drawn = next.trace.filter(t => t.plugin !== 'engine' && t.outcome !== 'passed' && t.returned != null)
-    const tabs = [
-      { name: HOME_TAB, tree: null },
-      { name: MODS_TAB, tree: null },
-      // The trace runs outer to inner; each tab drops the drawing of the mod beneath it.
-      ...drawn.map((t, i) => ({ name: t.plugin, tree: (without(t.returned, drawn[i + 1]?.returned) as typeof t.returned) ?? null })),
-    ]
-    const names = tabs.map(t => t.name)
-    const active = tabs.find(t => t.name === picked) ?? { name: HOME_TAB, tree: null }
-    const go = (delta: number) => () => update($, tab, () => stepTab(names, active.name, delta))
-    const toggle1 = (key: string, label: string, isOn: boolean, onPress: () => unknown) => (
-      <Box key={`row-${key}`} columnGap={1}>
-        <Text>{label}</Text>
-        <Button key={key} plain label={isOn ? '● ON ' : '○ OFF'} onPress={onPress} />
-      </Box>
-    )
-    const body =
-      active.tree ??
-      (active.name === MODS_TAB ? (
-        modsRow($, e, mods, busy)
-      ) : (
-        <Box columnGap={3}>
-          {toggle1('compact', 'Compact', isCompactOn, () => toggle($, 'compact'))}
-          {toggle1('status', 'Status rows', isStatusOn, () => toggle($, 'statusOn'))}
-        </Box>
-      ))
-    // Four rows: it floats over the prompt box and the row above it, and is cut at that region's top.
-    const card = (
-      <Box
-        key="ashpack-card"
-        position="absolute"
-        bottom={1}
-        right={0}
-        width={CARD_WIDTH}
-        flexDirection="column"
-        borderStyle="round"
-        borderColor={ACCENT}
-        backgroundColor={CARD_BG}
-        paddingX={1}
-      >
-        <Box justifyContent="space-between">
-          <Box columnGap={1}>
-            <Text bold color={ACCENT}>
-              ◆
-            </Text>
-            {tabs.length > 1 && <Button key="tab-prev" plain dimColor label="‹" onPress={go(-1)} />}
-            {tabs.map(t => (
-              <Button
-                key={`tab-${t.name}`}
-                plain
-                dimColor={t.name !== active.name}
-                label={t.name === active.name ? `[${tabLabel(t.name, PACK)}]` : tabLabel(t.name, PACK)}
-                onPress={() => update($, tab, () => t.name)}
-              />
-            ))}
-            {tabs.length > 1 && <Button key="tab-next" plain dimColor label="›" onPress={go(1)} />}
-          </Box>
-          <Box columnGap={2}>
-            <Text dimColor>
-              {drawn.length + 1} {drawn.length === 0 ? 'mod' : 'mods'}
-            </Text>
-            <Button key="card-close" plain dimColor label="✕" onPress={() => closeDrawer($)} />
-          </Box>
-        </Box>
-        {body}
-      </Box>
-    )
     return (
       <Box columnGap={2}>
-        {modes}
-        {handle}
-        {card}
+        {below}
+        <Box>
+          <Text color={ACCENT}>◆ </Text>
+          <Button key="ashpack" plain label={isOpen ? 'AshPack ◂' : 'AshPack ▸'} onPress={() => (isOpen ? closeDrawer($) : openDrawer($))} />
+        </Box>
       </Box>
     )
   })
@@ -619,41 +574,51 @@ export const register: Register = on => {
   }).catch(($, e, next) => next(e))
 
   on('command.run', { command: 'ashpack' }, async ($, e) => {
-    const arg = e.args.trim()
+    const arg = e.args.trim().toLowerCase()
     if (arg === 'compact' || arg === 'status') {
       const isOn = await toggle($, arg === 'compact' ? 'compact' : 'statusOn')
       return { text: `${arg === 'compact' ? 'Compact mode' : 'Status rows'} ${isOn ? 'on' : 'off'}.` }
     }
-    await openDrawer($, e.presentation.isFullscreen)
-    return { text: 'AshPack drawer opened.' }
+    // Any other word names a page (`/ashpack skins`); a page no mod draws shows Home.
+    await openDrawer($, arg || undefined)
+    return {}
   })
 
-  on('ui.render', { component: 'Pane', requestId: DRAWER }, async ($, e) => {
-    const [isCompactOn, isStatusOn, mods, busy] = await Promise.all([read($, compact), read($, statusOn), read($, pack), read($, packBusy)])
-    const { Box, Button, Text } = $.ui.resolve(e)
-    const switchRow = (key: string, hotkey: string, label: string, isOn: boolean, onPress: () => unknown) => (
-      <Box key={`row-${key}`} columnGap={2}>
-        <Box width={16}>
-          <Text>{label}</Text>
-        </Box>
-        <Button key={key} hotkey={hotkey} label={isOn ? '● ON ' : '○ OFF'} variant={isOn ? 'primary' : 'secondary'} onPress={onPress} />
-      </Box>
-    )
-
+  // ── the drawer: a header, the tab bar, the shown page ──
+  // The mods beneath draw their pages into `next(e)`'s tree; each keeps its own buttons.
+  on('ui.render', { component: 'Pane', requestId: DRAWER }, async ($, e, next) => {
+    // A mod whose page hook fails costs the pages, never the drawer.
+    const below = await next(e).catch(err => ($.ui.log(`ashpack drawer pages: ${String(err)}`, { to: 'debug' }), null))
+    const pages = findPages(below)
+    const [shown, isCompactOn, isStatusOn, mods, busy] = await Promise.all([
+      read($, page),
+      read($, compact),
+      read($, statusOn),
+      read($, pack),
+      read($, packBusy),
+    ])
+    const { Box, Text } = $.ui.resolve(e)
+    const tabs = [{ id: 'home', label: 'Home' }, ...pages, { id: 'mods', label: 'Mods' }]
+    const active = tabs.find(t => t.id === shown)?.id ?? 'home'
+    const body =
+      active === 'home'
+        ? homePage($, e, isCompactOn, isStatusOn, pages)
+        : active === 'mods'
+          ? modsPage($, e, mods, busy)
+          : ((pages.find(p => p.id === active)?.tree ?? null) as RenderElement | null)
     return (
-      <Box flexDirection="column">
-        {switchRow('compact', 'c', 'Compact mode', isCompactOn, () => toggle($, 'compact'))}
-        {switchRow('status', 's', 'Status rows', isStatusOn, () => toggle($, 'statusOn'))}
-        <Box columnGap={2}>
-          <Box width={16}>
-            <Text>Mods</Text>
-          </Box>
-          {modsRow($, e, mods, busy)}
+      <Box flexDirection="column" rowGap={1} paddingX={1}>
+        <Box justifyContent="space-between" columnGap={2}>
+          <Text wrap="truncate-end">
+            <Text bold color={ACCENT}>
+              ◆ AshPack
+            </Text>
+            <Text dimColor> · your mods, one place</Text>
+          </Text>
+          {e.surface === 'terminal' ? <Text dimColor>Esc closes</Text> : null}
         </Box>
-        <Box columnGap={2}>
-          <Text dimColor>Esc closes</Text>
-          <Button key="close" role="dismiss" plain dimColor label="close" onPress={() => closeDrawer($)} />
-        </Box>
+        {tabBar($, e, tabs, active)}
+        {body}
       </Box>
     )
   })

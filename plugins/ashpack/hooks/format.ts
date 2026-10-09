@@ -71,12 +71,6 @@ export const parseGit = (porcelain: string): GitInfo | null => {
   }
 }
 
-// The tab `delta` steps from `current`, wrapping at either end.
-export const stepTab = (names: readonly string[], current: string, delta: number): string => {
-  const at = Math.max(0, names.indexOf(current))
-  return names[(at + delta + names.length) % names.length] ?? current
-}
-
 // ── the status grid: 2 rows x 3 sections, as styled spans ──
 
 export type Span = { text: string; color?: string; dim?: boolean; bold?: boolean }
@@ -266,17 +260,26 @@ export const describeTool = (tool: string, input: unknown): string => {
   }
 }
 
-// A mod that wraps the mods beneath it returns their badges inside its own tree.
-// `without` drops every child that deep-equals `inner`, so its tab keeps only its own part.
-export const without = (tree: unknown, inner: unknown): unknown => {
-  const key = JSON.stringify(inner)
-  const strip = (node: unknown): unknown => {
-    const children = (node as { children?: unknown })?.children
-    if (!Array.isArray(children)) return node
-    return { ...(node as object), children: children.filter(c => JSON.stringify(c) !== key).map(strip) }
+// ── the drawer's pages ──
+// A mod gives itself a page in the drawer by hooking the drawer's pane and adding a
+// Box keyed `ashpack-page:<Label>` to the tree `next(e)` hands it (see the README).
+
+export const PAGE_PREFIX = 'ashpack-page:'
+export const BUILT_IN_PAGES = ['home', 'mods'] as const
+
+export type Page = { id: string; label: string; tree: unknown }
+
+const pagesIn = (node: unknown): Page[] => {
+  if (typeof node !== 'object' || node === null) return []
+  const { props, children } = node as { props?: { key?: unknown }; children?: unknown[] }
+  const key = props?.key
+  if (typeof key === 'string' && key.startsWith(PAGE_PREFIX)) {
+    const label = key.slice(PAGE_PREFIX.length).trim()
+    return label ? [{ id: label.toLowerCase(), label, tree: node }] : []
   }
-  return strip(tree)
+  return Array.isArray(children) ? children.flatMap(pagesIn) : []
 }
 
-// A tab's name: the pack's own mods drop the pack's prefix (`ashpack-skins` -> `skins`).
-export const tabLabel = (plugin: string, pack: string): string => plugin.replace(new RegExp(`^${pack}-`), '')
+// The pages in a drawn tree, in order; one per id, the drawer's own ids left to it.
+export const findPages = (tree: unknown): Page[] =>
+  pagesIn(tree).filter((p, i, all) => all.findIndex(q => q.id === p.id) === i && !(BUILT_IN_PAGES as readonly string[]).includes(p.id))

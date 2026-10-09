@@ -1,7 +1,7 @@
 // What the turn is doing: the running step's line, and the lines of the steps it finished.
 export type Activity = { startedAt: number; label: string; steps: number; trail: string[] }
 
-// One of the pack's mods, as the card's Mods tab lists it.
+// One of the pack's mods, as the drawer's Mods page lists it.
 export type PackMod = { name: string; state: 'on' | 'off' | 'missing' }
 
 // One item of the model's task list (TodoWrite, or TaskCreate/TaskUpdate).
@@ -32,7 +32,7 @@ declare module 'claude-code' {
       frame: number
       status: StatusData | null
       drawerOpen: boolean
-      tab: string
+      page: string // the drawer page shown: home, mods, or a mod's page id
       plan: Section[]
       pack: PackMod[]
       packBusy: string | null
