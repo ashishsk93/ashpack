@@ -358,22 +358,21 @@ export const register: Register = on => {
     const kind = kindOf(e.props.tool)
     const a = kind ? await active($) : null
     if (!kind || !a) return next(e)
-    const { Box, Text } = $.ui.resolve(e)
+    const { Text } = $.ui.resolve(e)
     const { p } = a
     const color = kindColor(p, kind)
     const [icon, iconColor] = e.props.isRunning ? ['○', p.muted] : e.props.isInterrupted ? ['◌', p.muted] : e.props.isErrored ? ['✕', p.red] : ['●', color]
     const target = targetOf(e.props.tool, e.props.input, await $.session.cwd())
+    // The desktop app draws its own tool rows, so this tree shows on the terminal.
     return (
-      <Box {...paint(e, p)}>
-        <Text wrap="truncate-end">
-          <Text color={iconColor}>{icon} </Text>
-          <Text color={color} bold>
-            {toolLabel(e.props.tool)}
-          </Text>
-          {target ? <Text color={p.muted}> {target}</Text> : null}
-          {e.props.isInterrupted ? <Text color={p.muted}> · interrupted</Text> : null}
+      <Text wrap="truncate-end">
+        <Text color={iconColor}>{icon} </Text>
+        <Text color={color} bold>
+          {toolLabel(e.props.tool)}
         </Text>
-      </Box>
+        {target ? <Text color={p.muted}> {target}</Text> : null}
+        {e.props.isInterrupted ? <Text color={p.muted}> · interrupted</Text> : null}
+      </Text>
     )
   })
 

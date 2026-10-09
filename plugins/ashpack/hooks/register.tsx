@@ -306,7 +306,7 @@ function homePage($: EngineInterface, e: PaneInput, isCompactOn: boolean, isStat
   const { Box, Text } = $.ui.resolve(e)
   return (
     <Box key="page-home" flexDirection="column" rowGap={1}>
-      {settingRow($, e, 'compact', 'Compact mode', 'Tool rows fold away; a popup above the prompt shows the work.', isCompactOn, () => toggle($, 'compact'))}
+      {settingRow($, e, 'compact', 'Compact mode', COMPACT_HINT[e.surface === 'terminal' ? 'terminal' : 'app'], isCompactOn, () => toggle($, 'compact'))}
       {settingRow($, e, 'status', 'Status rows', 'Model, branch, context and usage by the prompt.', isStatusOn, () => toggle($, 'statusOn'))}
       <Text dimColor>
         {pages.length > 0
@@ -316,6 +316,13 @@ function homePage($: EngineInterface, e: PaneInput, isCompactOn: boolean, isStat
     </Box>
   )
 }
+
+// The desktop app draws tool calls itself (its "Ran 2 commands" groups) and ignores a mod's
+// drawing of them, so there compact mode adds the popup and leaves the groups to the app.
+const COMPACT_HINT = {
+  terminal: 'Tool rows fold away; a popup above the prompt shows the work.',
+  app: 'Adds the work popup above the prompt. The app keeps its own tool groups.',
+} as const
 
 const ACTION: Record<PackMod['state'], string> = { on: 'turn off', off: 'turn on', missing: 'install' }
 const STATE: Record<PackMod['state'], [string, string | undefined]> = { on: ['●', COLORS.ok], off: ['○', undefined], missing: ['+', undefined] }
