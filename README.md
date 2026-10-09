@@ -19,12 +19,23 @@ Personal Claude Code mods. This repo is a plugin marketplace; each mod lives in 
 
 Claude Code runs the plugins of the user tier in the order of `enabledPlugins` in `~/.claude/settings.json`. The first entry runs first (outermost). The drawer can hold other mods only if `"ashpack@ashpack"` is the first entry. AshPack shows a toast at session start when it is not.
 
+## ashpack-skins
+
+Twelve skins: Catppuccin, Dracula, Nord, Gruvbox, Tokyo Night, Rosé Pine, Solarized, One, Everforest, GitHub, Kanagawa and Monokai. A skin redraws your prompts, the tool rows, the spinner's words and the turn footer in its colors. It uses only Box and Text, so the terminal and the desktop app's Code tab draw the same. The stored conversation, and what the model reads, do not change.
+
+To open the picker in the side panel, run `/skin`, or open the AshPack tray and press **◐ Skins** on its `skins` tab. The panel shows one mock card for each skin. Click a card or press its key to apply it. The **ON/OFF** toggle at the top (key `0`) turns skins off and back on and keeps your pick. `/skin <name>`, `/skin on` and `/skin off` work without the panel. Your choice is kept across sessions.
+
+Each skin has a dark and a light palette. The skin follows your `/theme`: a theme with "light" in its name gets the light palette.
+
+The Skins button lives in the footer. Put `"ashpack-skins@ashpack"` right after `"ashpack@ashpack"` in `enabledPlugins`: a mod that draws its footer badge without passing the footer on (baton does this) hides every mod listed after it.
+
 ## Install
 
 In a Claude Code session, install a mod from GitHub:
 
 ```
 /plugin install ashpack --marketplace ashishsk93/ashpack
+/plugin install ashpack-skins --marketplace ashishsk93/ashpack
 ```
 
 Answer `y` to add the marketplace, then pick a scope. Get later versions with `claude plugin marketplace update ashpack`, then `claude plugin update ashpack@ashpack`.

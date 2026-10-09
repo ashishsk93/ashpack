@@ -1,0 +1,9 @@
+{
+  "name": "ashpack-skins",
+  "version": "0.2.0",
+  "description": "Skins: the prompt, tool rows, spinner and turn footer redrawn in twelve palettes. Pick one with /skin or the Skins button.",
+  "author": {
+    "name": "Ashish S Kumar"
+  },
+  "types": "./types/index.d.ts"
+}

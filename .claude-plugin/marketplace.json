@@ -9,6 +9,11 @@
       "name": "ashpack",
       "source": "./plugins/ashpack",
       "description": "Status line, compact mode and the AshPack menu."
+    },
+    {
+      "name": "ashpack-skins",
+      "source": "./plugins/ashpack-skins",
+      "description": "Skins: the prompt, tool rows, spinner and turn footer redrawn in twelve palettes. Pick one with /skin or the Skins button."
     }
   ]
 }
