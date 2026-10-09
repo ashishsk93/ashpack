@@ -43,44 +43,23 @@ Answer `y` to add the marketplace, pick a scope, then `/reload-plugins`. Install
 
 Update with `claude plugin marketplace update ashpack`, then `claude plugin update <mod>@ashpack`.
 
-## ashpack
+## ashpack · the host
 
-- **Drawer**: click `◆ AshPack ▸` in the footer, or run `/ashpack`. The panel docks beside the transcript in the desktop app and in a fullscreen terminal, and sits above the prompt on the terminal's main screen. Tabs: **Home**, then one per mod. `/ashpack skins` opens a page; `/ashpack close` and Esc close it. On the terminal, `n` and `p` step through the tabs. The page shown and the open state are kept across sessions.
-- **Strip**: one row above the prompt with every mod's chips, wrapped when the row is short. Nothing is drawn when no mod has a chip.
-- **Home**: the mods with a page, the plugin order when it is wrong, and how to adopt.
-- **Colors**: the `◆` and the tab bar take the active skin's accent.
+<p align="center"><img src="docs/ashpack.svg" alt="The drawer with a tab per mod, and the strip above the prompt" width="880"></p>
 
-## ashpack-status
+The drawer (`◆ AshPack ▸` in the footer, or `/ashpack`), with **Home** and a tab per mod; the strip above the prompt with a chip per mod; the plugin-order check with its one-click fix. The page shown and the open state are kept across sessions. [Read more.](plugins/ashpack/README.md)
 
-**Status chips**, one row:
+## ashpack-status · chips and compact mode
 
-```
-◆ Opus 5.5 1M · ◕ high   ⎇ main ●1 ↑1   ctx ▰▰▱▱▱▱ 42%   session ▰▱▱▱▱▱ 23% ↻2h14m   week ▰▰▱▱▱▱ 41% ↻3d4h   app · $1.24 · 23m
-```
+<p align="center"><img src="docs/ashpack-status.svg" alt="The status chips, compact mode's working popup, and the Status page" width="880"></p>
 
-`●` changed files, `↑`/`↓` ahead/behind, `↻` time to reset. Bars are green below 60%, amber below 85%, red from 85%. They refresh on a timer, on each prompt and turn, and when the model changes. In a fullscreen terminal the chips sit under the prompt; elsewhere they are in the strip. The desktop app draws the bars as images, so the segments line up, and leaves out the model chip, since its own footer names the model.
+One row of chips: model, branch, context and usage, with segment bars that go green, amber, red. Compact mode folds the tool rows away and shows a popup with the work in progress, a wave loader beside the running step. [Read more.](plugins/ashpack-status/README.md)
 
-**Compact mode** hides tool calls, tool groups and progress pills; replies and the spinner stay. While Claude works, a popup above the prompt, half the width, shows a row per section of the work: Claude's task list when it keeps one, else the last three finished steps and the running one, with a wave loader beside it. In the desktop app the popup takes the chips' place while Claude works, so the two never stack. Press ctrl+o to see everything.
+## ashpack-skins · twelve skins
 
-**Settings**: the **Status** page of the drawer has the two switches. `/ashstatus` opens it (a pane of its own without the host); `/ashstatus compact` and `/ashstatus chips` flip one.
+<p align="center"><img src="docs/ashpack-skins.svg" alt="The same turn in several skins, then code and table cards" width="880"></p>
 
-## ashpack-skins
-
-Catppuccin, Dracula, Nord, Gruvbox, Tokyo Night, Rosé Pine, Solarized, One, Everforest, GitHub, Kanagawa and Monokai, each dark and light. A skin recolors your prompts, Claude's replies, the spinner and the turn footer, and lends its accent to the other AshPack mods. Text colors only: no painted backgrounds.
-
-| | Desktop app | Terminal |
-| --- | --- | --- |
-| Tool calls | A row with a line icon for its kind (a spinning ring while it runs), the target, lines changed, time taken | A plain row |
-| Runs of calls | One row, `Run 2 · Read 3` | Claude Code's own |
-| Edits | A diff card: `+N −M`, changed lines in green and red | Claude Code's own |
-| Shell commands | A terminal card: status, output, stderr apart, long output folded, Copy | Claude Code's own |
-| Tables in replies | A card whose rows rise in once, with Copy | An outlined grid |
-| Code in replies | A card with line numbers and colouring, with Copy | Claude Code's highlighting, with Copy |
-| Spinner | A wave in the skin's accent beside the step | The skin's word, then a wave |
-
-Cards animate only when new; a redraw shows them still. With compact mode on, tool rows are not drawn. The stored conversation and what the model reads do not change.
-
-The picker is the **Skins** page of the drawer: `/skin`, or open the drawer and click **Skins**. Click a card or press its key. Above the cards: **Skins on / off** (`0`) and **Dark / Light** (`m`), which also sets Claude Code's theme to match. `/skin <name>`, `/skin on|off`, `/skin dark|light` work without the picker. Choices are kept across sessions, and the skin follows `/theme`.
+Catppuccin, Dracula, Nord, Gruvbox, Tokyo Night, Rosé Pine, Solarized, One, Everforest, GitHub, Kanagawa and Monokai, dark or light. Text colors only. In the desktop app, tool calls become rows with icons, edits diff cards, shell output terminal cards, and code and tables cards with a Copy button. [Read more.](plugins/ashpack-skins/README.md)
 
 ## Give your mod a page and a chip
 
