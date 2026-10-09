@@ -1,4 +1,4 @@
-<h1 align="center">AshPack</h1>
+<p align="center"><img src="docs/title.svg" alt="AshPack" width="300"></p>
 
 <p align="center">One drawer and one strip, shared by all your Claude Code mods.<br/>So they stop fighting over the footer and the band above the prompt.</p>
 

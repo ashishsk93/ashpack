@@ -1,5 +1,6 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="880" height="420" viewBox="0 0 880 420" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="13">
   <defs>
+    <clipPath id="win"><rect x="0" y="0" width="880" height="420" rx="12"/></clipPath>
     <style>
       .t { fill: #d6d6dc }
       .m { fill: #7c7c86 }
@@ -28,13 +29,13 @@
 
   <!-- working popup (compact mode): appears at 1s, leaves at 5s -->
   <g opacity="0">
-    <animate attributeName="opacity" values="0;0;1;1;0;0" keyTimes="0;0.12;0.16;0.6;0.64;1" dur="9s" repeatCount="indefinite"/>
-    <rect x="24" y="238" width="400" height="86" rx="8" class="ln" stroke="#8b5cf6"/>
-    <text x="40" y="260" class="a" font-weight="600">◆ AshPack</text><text x="118" y="260" class="t">Testing…</text><text x="408" y="260" text-anchor="end" class="m">2/3 · 14s</text>
-    <text x="40" y="284" class="ok">✓ Read the code</text>
-    <text x="40" y="306" class="a" font-weight="600">▸ Fix the card</text>
+    <animate attributeName="opacity" values="0;1;0" keyTimes="0;0.14;0.62" calcMode="discrete" dur="9s" repeatCount="indefinite"/>
+    <rect x="24" y="200" width="400" height="86" rx="8" class="ln" stroke="#8b5cf6"/>
+    <text x="40" y="222" class="a" font-weight="600">◆ AshPack</text><text x="118" y="222" class="t">Testing…</text><text x="408" y="222" text-anchor="end" class="m">2/3 · 14s</text>
+    <text x="40" y="246" class="ok">✓ Read the code</text>
+    <text x="40" y="268" class="a" font-weight="600">▸ Fix the card</text>
     <!-- wave -->
-    <g transform="translate(200 297)" fill="#8b5cf6">
+    <g transform="translate(200 259)" fill="#8b5cf6">
       <rect x="0" width="4" rx="2" height="3" y="4.5"><animate attributeName="height" values="3;12;3" dur="0.9s" begin="0s" repeatCount="indefinite"/><animate attributeName="y" values="4.5;0;4.5" dur="0.9s" begin="0s" repeatCount="indefinite"/></rect>
       <rect x="7" width="4" rx="2" height="3" y="4.5"><animate attributeName="height" values="3;12;3" dur="0.9s" begin="-0.1s" repeatCount="indefinite"/><animate attributeName="y" values="4.5;0;4.5" dur="0.9s" begin="-0.1s" repeatCount="indefinite"/></rect>
       <rect x="14" width="4" rx="2" height="3" y="4.5"><animate attributeName="height" values="3;12;3" dur="0.9s" begin="-0.2s" repeatCount="indefinite"/><animate attributeName="y" values="4.5;0;4.5" dur="0.9s" begin="-0.2s" repeatCount="indefinite"/></rect>
@@ -42,12 +43,12 @@
       <rect x="28" width="4" rx="2" height="3" y="4.5"><animate attributeName="height" values="3;12;3" dur="0.9s" begin="-0.4s" repeatCount="indefinite"/><animate attributeName="y" values="4.5;0;4.5" dur="0.9s" begin="-0.4s" repeatCount="indefinite"/></rect>
       <rect x="35" width="4" rx="2" height="3" y="4.5"><animate attributeName="height" values="3;12;3" dur="0.9s" begin="-0.5s" repeatCount="indefinite"/><animate attributeName="y" values="4.5;0;4.5" dur="0.9s" begin="-0.5s" repeatCount="indefinite"/></rect>
     </g>
-    <text x="40" y="320" class="m">○ Run tests</text>
+    <text x="40" y="282" class="m">○ Run tests</text>
   </g>
 
   <!-- status strip: shown while the popup is not -->
   <g>
-    <animate attributeName="opacity" values="1;1;0;0;1;1" keyTimes="0;0.12;0.16;0.6;0.64;1" dur="9s" repeatCount="indefinite"/>
+    <animate attributeName="opacity" values="1;0;1" keyTimes="0;0.14;0.62" calcMode="discrete" dur="9s" repeatCount="indefinite"/>
     <text x="24" y="314" class="a" font-weight="600">◆ Opus 5.5</text><text x="104" y="314" class="bl">· ● high</text>
     <text x="178" y="314" class="ok">⎇ main</text><text x="236" y="314" class="wn">●1</text>
     <text x="280" y="314" class="m">ctx</text>
@@ -69,8 +70,8 @@
   <text x="776" y="398" text-anchor="end" class="a">◆</text>
 
   <!-- drawer: slides in at 6s -->
-  <g>
-    <animateTransform attributeName="transform" type="translate" values="300 0;300 0;0 0;0 0;300 0;300 0" keyTimes="0;0.66;0.7;0.96;1;1" dur="9s" repeatCount="indefinite" calcMode="spline" keySplines="0 0 1 1;.2 0 0 1;0 0 1 1;.4 0 1 1;0 0 1 1"/>
+  <g clip-path="url(#win)">
+    <animateTransform attributeName="transform" type="translate" values="340 0;340 0;0 0;0 0;340 0;340 0" keyTimes="0;0.66;0.7;0.96;1;1" dur="9s" repeatCount="indefinite" calcMode="spline" keySplines="0 0 1 1;.2 0 0 1;0 0 1 1;.4 0 1 1;0 0 1 1"/>
     <rect x="560" y="34" width="296" height="290" rx="10" fill="#1e1e24" stroke="#3a3a44"/>
     <text x="576" y="58" class="a" font-weight="600">◆ AshPack</text><text x="652" y="58" class="m">· your mods, one place</text>
     <text x="576" y="88" class="m">Home</text>
@@ -79,12 +80,13 @@
     <text x="682" y="88" class="m">Skins</text>
     <text x="730" y="88" class="m">Baton</text>
     <text x="576" y="124" class="t" font-weight="600">Compact mode</text>
-    <text x="576" y="142" class="m">Hide tool rows; a popup shows the work.</text>
+    <text x="576" y="142" class="m">Hide tool rows; show a popup.</text>
     <text x="840" y="124" text-anchor="end" class="ok">● ON</text>
     <text x="576" y="176" class="t" font-weight="600">Status chips</text>
     <text x="576" y="194" class="m">Model, branch, context and usage.</text>
     <text x="840" y="176" text-anchor="end" class="ok">● ON</text>
     <text x="576" y="236" class="m">A mod joins with one Box keyed</text>
-    <text x="576" y="254" class="m">"ashpack-page:Label". See ADOPTING.md.</text>
+    <text x="576" y="254" class="m">"ashpack-page:Label".</text>
+    <text x="576" y="272" class="m">See ADOPTING.md.</text>
   </g>
 </svg>
