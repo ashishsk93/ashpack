@@ -15,12 +15,12 @@ import {
   packMods,
   planFromTodos,
   popupWidth,
-  scanner,
-  scannerSvg,
   segments,
   statusGrid,
   TRAIL,
   updateTask,
+  wave,
+  waveSvg,
 } from './format'
 
 // AshPack. Everything that touches `$` lives in this one file (the engine
@@ -40,7 +40,8 @@ const STATUS_TICK_MS = 30_000
 const FRAME_MS = 120
 const GRID_GAP = 2 // columns between a status section's text and the next "│"
 const POPUP_ROWS = 5 // sections the working popup shows at most
-const LOADER_PX = 160 // the desktop loader's width, in CSS pixels
+const LOADER_PX = 120 // the desktop loader's width, in CSS pixels
+const LOADER_CELLS = 12 // the terminal loader's width at most
 const ACCENT = COLORS.accent
 const BLUE = COLORS.blue
 const PACK = 'ashpack' // the marketplace the pack's mods come from
@@ -164,22 +165,28 @@ const seconds = (ms: number): string => {
   return s < 60 ? `${s}s` : `${Math.floor(s / 60)}m ${s % 60}s`
 }
 
+// The Skins mod's active accent ('' while skins are off), so the loader wears the skin.
+const SKIN_ACCENT = { plugin: 'ashpack-skins', key: 'accent' } as const
+
+// The loader's color: the skin's accent, else AshPack's blue (no Skins mod, or skins off).
+// Reading it while drawing redraws the loader when the skin changes.
+async function loaderColor($: EngineInterface): Promise<string> {
+  const held = await $.state.get(SKIN_ACCENT as never).catch(() => undefined)
+  const value: unknown = held?.value
+  return typeof value === 'string' && value !== '' ? value : BLUE
+}
+
 // The running section's loader: redrawn per frame on the terminal; an SVG that
 // animates itself elsewhere, so the desktop never redraws for it.
-function loader($: EngineInterface, e: RenderInput<'AbovePrompt'>, f: number, cells: number) {
+function loader($: EngineInterface, e: RenderInput<'AbovePrompt'>, f: number, cells: number, color: string) {
   if (e.surface !== 'terminal') {
     const { Svg } = $.ui.resolve(e)
-    return <Svg key="loader" source={scannerSvg(BLUE, LOADER_PX)} alt="Working" />
+    return <Svg key="loader" source={waveSvg(color, LOADER_PX)} alt="Working" />
   }
   const { Text } = $.ui.resolve(e)
-  const runs = scanner(f, cells).match(/─+|[^─]+/g) ?? []
   return (
-    <Text key="loader">
-      {runs.map((run, i) => (
-        <Text key={`run-${i}`} color={run.startsWith('─') ? undefined : BLUE} dimColor={run.startsWith('─')}>
-          {run}
-        </Text>
-      ))}
+    <Text key="loader" color={color}>
+      {wave(f, Math.min(cells, LOADER_CELLS))}
     </Text>
   )
 }
@@ -192,7 +199,7 @@ async function drawPopup($: EngineInterface, e: RenderInput<'AbovePrompt'>, a: A
   const { Box, Text } = $.ui.resolve(e)
   const isTerminal = e.surface === 'terminal'
   // Reading `frame` redraws per tick: the terminal only.
-  const [list, f] = await Promise.all([read($, plan), isTerminal ? read($, frame) : 0])
+  const [list, f, color] = await Promise.all([read($, plan), isTerminal ? read($, frame) : 0, loaderColor($)])
   const width = popupWidth(e.props.bodyColumns)
   const inner = width - 4 // border and padding
   const titleWidth = Math.floor(inner * 0.55)
@@ -229,7 +236,7 @@ async function drawPopup($: EngineInterface, e: RenderInput<'AbovePrompt'>, a: A
               {s.state === 'now' && isTrail ? '…' : ''}
             </Text>
           </Box>
-          {s.state === 'now' ? loader($, e, f, inner - titleWidth - 1) : null}
+          {s.state === 'now' ? loader($, e, f, inner - titleWidth - 1, color) : null}
         </Box>
       ))}
     </Box>

@@ -14,11 +14,11 @@ import {
   planFromTodos,
   popupWidth,
   prettyModel,
-  scanner,
-  scannerSvg,
   segments,
   statusGrid,
   updateTask,
+  wave,
+  waveSvg,
   windowLabel,
 } from './format'
 
@@ -119,15 +119,13 @@ test('helpers: names, bars, colors, git, tabs, loader', () => {
   expect(findPages(tree).map(p => `${p.id}:${p.label}:${flatten(p.tree)}`)).toEqual(['baton:Baton:b', 'skins:Skins:s'])
   expect(findPages('engine text')).toEqual([])
 
-  // The pill enters at the left edge of the track and leaves at the right.
-  expect(scanner(0, 8)).toBe('╸───────')
-  expect(scanner(5, 8)).toBe('╺━━━━╸──')
-  expect(scanner(7, 8)).toBe('──╺━━━━╸')
-  expect(scanner(13, 8)).toBe('────────')
-  expect(scanner(14, 8)).toBe(scanner(0, 8))
-  // The desktop's loader is one fixed SVG that animates itself.
-  expect(scannerSvg('#2f7bf0', 160)).toBe(scannerSvg('#2f7bf0', 160))
-  expect(scannerSvg('#2f7bf0', 160)).toMatch(/^<svg .*<animate attributeName="x" .*repeatCount="indefinite".*<\/svg>$/)
+  // The wave: one bar per cell, moving right a step per frame.
+  expect(wave(0, 4)).toBe('▅▇█▇')
+  expect(wave(1, 4)).toBe('▃▆██')
+  expect(wave(0, 8)).toMatch(/^[▁▂▃▄▅▆▇█]{8}$/)
+  // The desktop's loader is one fixed SVG that animates itself, each bar a beat behind.
+  expect(waveSvg('#2f7bf0', 120)).toBe(waveSvg('#2f7bf0', 120))
+  expect(waveSvg('#2f7bf0', 120)).toMatch(/^<svg .*width="116".*<animate attributeName="height" .*begin="-0.1s".*<\/svg>$/)
 
   // The popup: half the band, never under 48 columns; at most n rows, the running one in view.
   expect(popupWidth(160)).toBe(80)
@@ -339,6 +337,11 @@ test('the status rows draw model, branch, context and usage bars above the promp
 
 test('compact mode: a half-width popup lists the turn\'s sections as rows, the running one with a loader', async ($, on) => {
   mock.store(on)
+  // Stands in for the Skins mod, which shares the active skin's accent.
+  on('state.get', ($, e, next) => {
+    const { plugin, key } = e as { plugin: string; key: string } // another plugin's value: not in AshPack's contract
+    return plugin === 'ashpack-skins' && key === 'accent' ? ({ value: { value: '#fab387', version: 1 } } as never) : next(e)
+  })
   // Stands in for the engine's own drawing under the drawer pane.
   on('ui.render', DRAWER, ($, e) => {
     const { Box } = $.ui.resolve(e)
@@ -365,8 +368,9 @@ test('compact mode: a half-width popup lists the turn\'s sections as rows, the r
     expect(text).toContain('✓ Running /verify')
     expect(text).toContain('▸ Thinking…')
     // The terminal draws the loader as text per frame; the desktop as an SVG that animates itself.
-    if (surface === 'terminal') expect(text).toMatch(/─+|━/)
+    if (surface === 'terminal') expect(text).toMatch(/[▁▂▃▄▅▆▇█]{3}/)
     else expect(drawn).toContain('<animate ')
+    expect(drawn).toContain('#fab387') // the loader wears the skin
     await trail.unmount()
   }
 

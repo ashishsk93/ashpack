@@ -1,12 +1,11 @@
 import { atom, memberOf, read, update } from 'claude-code'
-import type { EngineInterface, Register, RenderInput } from 'claude-code'
+import type { EngineInterface, Register, RenderInput, Timer } from 'claude-code'
 
 import type { Block, Inline } from './markdown'
 import { parseBlocks } from './markdown'
 import type { Card, Table } from './cards'
 import { cardWidth, codeSvg, diffOf, diffSvg, shellOf, tableOf, tableSvg, terminalSvg } from './cards'
-import type { Phase } from './icons'
-import { phaseIcon, toolIcon } from './icons'
+import { toolIcon, wave, waveSvg } from './icons'
 import type { Kind, Palette, Skin } from './skins'
 import { cardLayout, duration, isLightTheme, kindColor, kindOf, OFF, paletteOf, pick, pixelRows, pixelSvg, pixelWidth, SKINS, skinById, targetOf, themeFor, toolLabel } from './skins'
 
@@ -43,6 +42,11 @@ const isLight = atom({ plugin: 'ashpack-skins', key: 'isLight' } as const, false
 const hasImages = atom({ plugin: 'ashpack-skins', key: 'images' } as const, false)
 const tookMs = atom({ plugin: 'ashpack-skins', key: 'duration' } as const, -1) // per tool call: how long it ran
 const commandOf = atom({ plugin: 'ashpack-skins', key: 'command' } as const, '') // per Bash call: its command
+const sharedAccent = atom({ plugin: 'ashpack-skins', key: 'accent' } as const, '') // read by AshPack's loader
+const frame = atom({ plugin: 'ashpack-skins', key: 'frame' } as const, 0)
+const FRAME_MS = 120
+const SPINNER_CELLS = 4 // the terminal spinner's wave
+const SPINNER_PX = 25 // the desktop spinner's wave: four bars
 const ANIMATE_MS = 1500 // a card's rows rise in during its first moments only
 const MAX_SEEN = 500
 const EDITS = new Set(['Edit', 'Write', 'MultiEdit'])
@@ -55,6 +59,20 @@ async function active($: EngineInterface): Promise<Active | null> {
   return skin ? { skin, p: paletteOf(skin, light) } : null
 }
 
+// Other mods (AshPack's loader) wear the active skin's accent.
+async function shareAccent($: EngineInterface): Promise<void> {
+  const a = await active($)
+  await update($, sharedAccent, () => a?.p.accent ?? '')
+}
+
+// The terminal spinner's wave moves a step per tick while a turn runs.
+let ticker: Timer | undefined
+
+function stopTicker(): void {
+  ticker?.cancel()
+  ticker = undefined
+}
+
 async function load($: EngineInterface): Promise<void> {
   const [stored, storedOn, mode] = await Promise.all([$.store.get(SKIN_KEY), $.store.get(ON_KEY), $.store.get(MODE_KEY)])
   // 0.1.0 stored 'off' as the skin itself.
@@ -62,6 +80,7 @@ async function load($: EngineInterface): Promise<void> {
   await update($, isOn, () => (typeof storedOn === 'boolean' ? storedOn : stored !== OFF))
   if (mode === 'light' || mode === 'dark') await update($, isLight, () => mode === 'light')
   else await followTheme($)
+  await shareAccent($)
 }
 
 const themeOf = async ($: EngineInterface): Promise<unknown> => (await $.config.list()).find(r => r.key === 'theme')?.value
@@ -71,12 +90,14 @@ async function followTheme($: EngineInterface): Promise<void> {
   const light = isLightTheme(await themeOf($))
   await update($, isLight, () => light)
   await $.store.set(MODE_KEY, light ? 'light' : 'dark')
+  await shareAccent($)
 }
 
 // Dark or light: the skin's palette, and Claude Code's own theme to match.
 async function setLight($: EngineInterface, light: boolean): Promise<void> {
   await update($, isLight, () => light)
   await $.store.set(MODE_KEY, light ? 'light' : 'dark')
+  await shareAccent($)
   const theme = await themeOf($)
   const wanted = themeFor(theme, light)
   if (wanted === theme) return
@@ -87,6 +108,7 @@ async function setLight($: EngineInterface, light: boolean): Promise<void> {
 async function setOn($: EngineInterface, value: boolean): Promise<void> {
   await update($, isOn, () => value)
   await $.store.set(ON_KEY, value)
+  await shareAccent($)
 }
 
 // Picking a skin turns skins on.
@@ -578,21 +600,35 @@ export const register: Register = on => {
     )
   })
 
-  // The spinner keeps Claude Code's line (time, tokens) and says the skin's word.
-  // The desktop: a moving mark for what the turn is doing, beside the step the app names.
+  on('turn.start', async ($, e, next) => {
+    stopTicker()
+    ticker = $.clock.every(FRAME_MS, () => void update($, frame, n => (n + 1) % 100_000))
+    return next(e)
+  })
+
+  on('turn.complete', async ($, e, next) => {
+    if (!e.agentId) stopTicker()
+    return next(e)
+  })
+
+  // The spinner: a wave in the skin's accent. The terminal keeps Claude Code's line (time,
+  // tokens), says the skin's word and puts the wave after it; the desktop draws the wave
+  // beside the step the app names.
   on('ui.render', { component: 'Spinner' }, async ($, e, next) => {
     const a = await active($)
-    if (a && e.surface !== 'terminal') {
+    if (!a) return next(e)
+    if (e.surface !== 'terminal') {
       const { Box, Svg, Text } = $.ui.resolve(e)
       return (
         <Box flexDirection="row" columnGap={1} alignItems="center">
-          <Svg source={phaseIcon(e.props.mode as Phase, a.p.accent)} alt={e.props.mode} width={18} height={18} />
+          <Svg source={waveSvg(a.p.accent, SPINNER_PX)} alt="Working" />
           <Text color={a.p.muted}>{e.props.message ?? e.props.word}</Text>
         </Box>
       )
     }
-    if (!a || e.props.message !== null) return next(e)
-    return next({ ...e, props: { ...e.props, word: pick(a.skin.words, e.props.word) } })
+    const f = await read($, frame)
+    const word = e.props.message === null ? pick(a.skin.words, e.props.word) : e.props.word
+    return next({ ...e, props: { ...e.props, word, suffix: `${e.props.suffix} ${wave(f, SPINNER_CELLS)}` } })
   })
 
   on('ui.render', { component: 'TurnDuration' }, async ($, e, next) => {

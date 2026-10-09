@@ -1,7 +1,7 @@
 import type { Kind } from './skins'
 
-// Small line icons the desktop app draws as images: one per kind of tool call, and one
-// for each phase of a turn. Animation is CSS inside the SVG, which plays in the image.
+// Small line icons the desktop app draws as images, one per kind of tool call, and the
+// turn's loader. Animation is CSS or SMIL inside the SVG, which plays in the image.
 
 // Strokes on a 24-unit grid.
 const SHAPES: Readonly<Record<Kind, string>> = {
@@ -27,31 +27,32 @@ export const toolIcon = (kind: Kind, color: string, isRunning: boolean): string 
     ? svg(16, TURN, `<g transform="translate(6 6) scale(.5)">${strokes(color, SHAPES[kind])}</g><circle class="t" cx="12" cy="12" r="10" fill="none" stroke="${color}" stroke-width="1.7" stroke-linecap="round" stroke-dasharray="16 47"/>`)
     : svg(16, '', strokes(color, SHAPES[kind]))
 
-export type Phase = 'requesting' | 'responding' | 'thinking' | 'tool-input' | 'tool-use'
+// ── the turn's loader: a row of bars that rise and fall in turn, a wave moving right ──
 
-// What the turn is doing, as a moving mark: a slow pulse while it thinks, a turning ring
-// while a tool runs, three rising bars while it writes, three blinking dots otherwise.
-export const phaseIcon = (phase: Phase, color: string): string => {
-  if (phase === 'thinking') {
-    return svg(
-      18,
-      '.p{transform-box:view-box;transform-origin:12px 12px;animation:p 1.4s ease-in-out infinite}@keyframes p{0%,100%{transform:scale(.6);opacity:.5}50%{transform:scale(1);opacity:1}}',
-      `<circle class="p" cx="12" cy="12" r="6" fill="${color}"/>`,
+const LEVELS = '▁▂▃▄▅▆▇█'
+
+// The terminal's wave at `frame`: `width` cells, each a bar.
+export const wave = (frame: number, width: number): string =>
+  Array.from({ length: width }, (_, i) => LEVELS[Math.round(((Math.sin(i * 0.8 - frame * 0.45) + 1) / 2) * 7)]).join('')
+
+const BAR_PX = 4
+const BAR_GAP_PX = 3
+const WAVE_H = 12 // px
+const WAVE_S = 0.9
+
+// The desktop's wave: an SVG that animates itself (SMIL), each bar a beat behind the one before.
+export const waveSvg = (color: string, width: number): string => {
+  const bars = Math.max(3, Math.floor((width + BAR_GAP_PX) / (BAR_PX + BAR_GAP_PX)))
+  const w = bars * (BAR_PX + BAR_GAP_PX) - BAR_GAP_PX
+  const low = WAVE_H / 4
+  const rects = Array.from({ length: bars }, (_, i) => {
+    const begin = `begin="${(-i * 0.1).toFixed(1)}s"`
+    return (
+      `<rect x="${i * (BAR_PX + BAR_GAP_PX)}" width="${BAR_PX}" rx="${BAR_PX / 2}" fill="${color}">` +
+      `<animate attributeName="height" values="${low};${WAVE_H};${low}" dur="${WAVE_S}s" ${begin} repeatCount="indefinite"/>` +
+      `<animate attributeName="y" values="${(WAVE_H - low) / 2};0;${(WAVE_H - low) / 2}" dur="${WAVE_S}s" ${begin} repeatCount="indefinite"/>` +
+      `</rect>`
     )
-  }
-  if (phase === 'tool-use') {
-    return svg(18, TURN, `<circle cx="12" cy="12" r="8" fill="none" stroke="${color}" stroke-opacity=".2" stroke-width="2.2"/><circle class="t" cx="12" cy="12" r="8" fill="none" stroke="${color}" stroke-width="2.2" stroke-linecap="round" stroke-dasharray="12 38"/>`)
-  }
-  if (phase === 'responding') {
-    return svg(
-      18,
-      '.b{transform-box:fill-box;transform-origin:center bottom;animation:b .8s ease-in-out infinite}.b2{animation-delay:.12s}.b3{animation-delay:.24s}@keyframes b{0%,100%{transform:scaleY(.3)}50%{transform:scaleY(1)}}',
-      [6, 11, 16].map((x, i) => `<rect class="b b${i + 1}" x="${x}" y="6" width="2.6" height="12" rx="1.3" fill="${color}"/>`).join(''),
-    )
-  }
-  return svg(
-    18,
-    '.d{animation:d 1.2s ease-in-out infinite}.d2{animation-delay:.2s}.d3{animation-delay:.4s}@keyframes d{0%,100%{opacity:.25}40%{opacity:1}}',
-    [6.5, 12, 17.5].map((x, i) => `<circle class="d d${i + 1}" cx="${x}" cy="12" r="2" fill="${color}"/>`).join(''),
-  )
+  }).join('')
+  return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${w} ${WAVE_H}" width="${w}" height="${WAVE_H}">${rects}</svg>`
 }

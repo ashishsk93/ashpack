@@ -232,12 +232,14 @@ test('a reply draws in the skin\'s colors, with code and tables as cards', async
   }
 })
 
-test('the desktop draws tool rows, group rows, diff and terminal cards, and a moving mark for the turn', async ($, on) => {
+test('the desktop draws tool rows, group rows, diff and terminal cards; the spinner is a wave', async ($, on) => {
   mock.store(on)
   const clock = mock.clock(on, { now: 0 })
   on('config.list', () => ({ value: [{ key: 'theme', value: 'dark' }] }) as never)
   on('session.cwd', () => ({ value: '/repo' }) as never)
+  let suffix = '' // what the skin hands Claude Code's spinner to draw after the word
   on('ui.render', { component: ['ToolResult', 'ToolUse', 'ToolGroup', 'Spinner'] }, ($, e) => {
+    if (e.component === 'Spinner') suffix = (e.props as { suffix: string }).suffix
     const { Text } = $.ui.resolve(e)
     return <Text>{`engine-${e.component}`}</Text>
   })
@@ -288,15 +290,26 @@ test('the desktop draws tool rows, group rows, diff and terminal cards, and a mo
   // The terminal keeps Claude Code's own diff and output.
   expect(await drawnOf(await mount('terminal', 'ToolResult', { tool_use_id: 'b1', tool: 'Bash', output: shell, isErrored: false }))).toContain('engine-ToolResult')
 
-  const spin = await drawnOf(await mount('desktop', 'Spinner', { word: 'Baking', message: 'Reading auth.ts', suffix: '…', mode: 'tool-use' }))
-  for (const part of ['"type":"Svg"', 'Reading auth.ts']) expect(spin).toContain(part)
+  // The spinner: a wave in the skin's accent; the terminal puts it after Claude Code's word.
+  const spinProps = { word: 'Baking', message: 'Reading auth.ts', suffix: '…', mode: 'tool-use' }
+  const spin = await drawnOf(await mount('desktop', 'Spinner', spinProps))
+  for (const part of ['"type":"Svg"', 'Reading auth.ts', '<animate attributeName=\\"height\\"', p.accent]) expect(spin).toContain(part)
+  await drawnOf(await mount('terminal', 'Spinner', spinProps))
+  expect(suffix).toMatch(/^… [▁▂▃▄▅▆▇█]{4}$/)
 })
 
-test('/skin <name> switches, an unknown name lists the skins', async ($, on) => {
+test('/skin <name> switches and shares its accent, an unknown name lists the skins', async ($, on) => {
   mock.store(on)
+  let accent: unknown // what AshPack's loader would read
+  on('state.set', ($, e, next) => {
+    if (e.key === 'accent') accent = e.value
+    return next(e)
+  })
   const picked = await $.command.run({ command: 'skin', args: 'dracula' } as never)
   expect(picked.text).toBe('Skin: Dracula.')
+  expect(accent).toBe(SKINS.find(s => s.id === 'dracula')!.dark.accent)
   const bad = await $.command.run({ command: 'skin', args: 'nope' } as never)
   expect(bad.text).toContain('catppuccin')
   expect((await $.command.run({ command: 'skin', args: 'off' } as never)).text).toContain('off')
+  expect(accent).toBe('')
 })

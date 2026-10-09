@@ -142,32 +142,35 @@ export const gridWidths = (grid: Cell[][], gap: number): number[] =>
 
 export const gridBarWidth = (total: number): number => (total >= 140 ? 8 : total >= 100 ? 6 : 4)
 
-// ── the loader: a short pill sliding along a thin track, the bars' own line style ──
+// ── the loader: a row of bars that rise and fall in turn, a wave moving right ──
 
-const PILL = '╺━━━━╸'
+const LEVELS = '▁▂▃▄▅▆▇█'
 
-// The terminal's loader at `frame`: `width` cells, the track `─` wherever the pill is not.
-export const scanner = (frame: number, width: number): string => {
-  const at = (frame % (width + PILL.length)) - PILL.length + 1 // the pill's first cell
-  return Array.from({ length: width }, (_, i) => PILL[i - at] ?? '─').join('')
-}
+// The terminal's loader at `frame`: `width` cells, each a bar of the wave.
+export const wave = (frame: number, width: number): string =>
+  Array.from({ length: width }, (_, i) => LEVELS[Math.round(((Math.sin(i * 0.8 - frame * 0.45) + 1) / 2) * 7)]).join('')
 
-const LOADER_H = 8 // px
-const SWEEP_S = 1.6
+const BAR_PX = 4
+const BAR_GAP_PX = 3
+const WAVE_H = 12 // px
+const WAVE_S = 0.9
 
-// The desktop's loader: the same picture as an SVG that animates itself (SMIL), a thin
-// track and a rounded pill gliding across it. The markup never changes, so a redraw does
-// not restart it. The track is a translucent grey, so it reads on a light or a dark app.
-export const scannerSvg = (color: string, width: number): string => {
-  const pill = Math.round(width / 4)
-  const y = LOADER_H / 2 - 1.5
-  return (
-    `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${width} ${LOADER_H}" width="${width}" height="${LOADER_H}">` +
-    `<rect y="${y}" width="${width}" height="3" rx="1.5" fill="#8a8a8a" opacity="0.3"/>` +
-    `<rect y="${y}" width="${pill}" height="3" rx="1.5" fill="${color}">` +
-    `<animate attributeName="x" values="${-pill};${width}" dur="${SWEEP_S}s" repeatCount="indefinite" calcMode="spline" keyTimes="0;1" keySplines="0.45 0 0.55 1"/>` +
-    `</rect></svg>`
-  )
+// The desktop's loader: the same picture as an SVG that animates itself (SMIL), each bar
+// a beat behind the one before. The markup never changes, so a redraw does not restart it.
+export const waveSvg = (color: string, width: number): string => {
+  const bars = Math.max(3, Math.floor((width + BAR_GAP_PX) / (BAR_PX + BAR_GAP_PX)))
+  const w = bars * (BAR_PX + BAR_GAP_PX) - BAR_GAP_PX
+  const low = WAVE_H / 4
+  const rects = Array.from({ length: bars }, (_, i) => {
+    const begin = `begin="${(-i * 0.1).toFixed(1)}s"`
+    return (
+      `<rect x="${i * (BAR_PX + BAR_GAP_PX)}" width="${BAR_PX}" rx="${BAR_PX / 2}" fill="${color}">` +
+      `<animate attributeName="height" values="${low};${WAVE_H};${low}" dur="${WAVE_S}s" ${begin} repeatCount="indefinite"/>` +
+      `<animate attributeName="y" values="${(WAVE_H - low) / 2};0;${(WAVE_H - low) / 2}" dur="${WAVE_S}s" ${begin} repeatCount="indefinite"/>` +
+      `</rect>`
+    )
+  }).join('')
+  return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${w} ${WAVE_H}" width="${w}" height="${WAVE_H}">${rects}</svg>`
 }
 
 // The working popup takes half the band, but no less than a readable 48 columns.
