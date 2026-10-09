@@ -1,6 +1,6 @@
 {
   "name": "ashpack",
-  "version": "0.9.2",
+  "version": "0.9.3",
   "description": "AshPack: status chips, compact mode with a working popup, and a side-panel drawer where each mod has its own page.",
   "author": {
     "name": "Ashish S Kumar"

@@ -115,8 +115,10 @@ const resetIn = (r: RateWindow, now: number): Span[] => {
 }
 
 // Chips, in order: model · effort | ⎇ branch ●n ↑n ↓n | ctx | session ↻ | week (+ per-model) ↻ | folder · $cost · time
-// `accent` colors the model: the skin's accent when one is on, else AshPack's own.
-export const statusChips = (d: StatusData, now: number, barWidth: number, accent: string): Cell[] => {
+// `accent` colors the model: the skin's accent when one is on, else AshPack's own. With
+// `hasModel` false the model chip is left out (the desktop app names the model and effort
+// in its own footer).
+export const statusChips = (d: StatusData, now: number, barWidth: number, accent: string, hasModel = true): Cell[] => {
   const session = d.rateLimits.find(r => r.kind === 'five_hour')
   const weekly = d.rateLimits.filter(r => r.kind !== 'five_hour')
   const resets = new Set(weekly.map(r => r.resetsAt))
@@ -139,8 +141,9 @@ export const statusChips = (d: StatusData, now: number, barWidth: number, accent
     ...meter(windowLabel(r.kind), r.percentUsed, barWidth),
     ...(resets.size > 1 ? resetIn(r, now) : []),
   ])
+  const model: Cell = [{ text: `◆ ${prettyModel(d.model)}`, color: accent, bold: true }, ...(d.effort ? [{ text: ` · ${effortLabel(d.effort)}`, color: COLORS.blue }] : [])]
   return [
-    [{ text: `◆ ${prettyModel(d.model)}`, color: accent, bold: true }, ...(d.effort ? [{ text: ` · ${effortLabel(d.effort)}`, color: COLORS.blue }] : [])],
+    ...(hasModel ? [model] : []),
     git,
     meter('ctx', d.contextPercent ?? 0, barWidth),
     session ? [...meter('session', session.percentUsed, barWidth), ...resetIn(session, now)] : [{ text: 'session —', dim: true }],

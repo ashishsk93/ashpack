@@ -126,8 +126,8 @@ type StatusSite = RenderInput<'PromptHint'> | RenderInput<'AbovePrompt'>
 // row of text. Both wrap when the row is short.
 function drawChips($: EngineInterface, e: StatusSite, data: StatusData, now: number, total: number, accent: string) {
   const { Box, Text } = $.ui.resolve(e)
-  const chips = statusChips(data, now, chipBarWidth(total), accent)
   const isTerminal = e.surface === 'terminal'
+  const chips = statusChips(data, now, chipBarWidth(total), accent, isTerminal)
   // Svg is not in the terminal's table: resolved only off it.
   const Svg = e.surface === 'terminal' ? null : $.ui.resolve(e).Svg
   const text = (sp: TextSpan, key: string) => (

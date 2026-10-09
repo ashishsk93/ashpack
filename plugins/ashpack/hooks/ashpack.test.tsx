@@ -313,9 +313,12 @@ test('the status chips draw model, branch, context and usage above the prompt', 
     })
     // The chips in the band: outlined pills on the desktop, a spaced row on the terminal.
     const text = flatten(await band.drawn())
-    for (const part of ['Opus 5.5 1M', '◕ high', '⎇ main', '●1', '↑1', 'ashpack', '$1.24', 'ctx', '42%', 'session', '23%', '↻2h14m', 'fable', '91%']) {
+    for (const part of ['⎇ main', '●1', '↑1', 'ashpack', '$1.24', 'ctx', '42%', 'session', '23%', '↻2h14m', 'fable', '91%']) {
       expect(text).toContain(part)
     }
+    // The desktop app names the model and effort in its own footer: no model chip there.
+    if (surface === 'terminal') expect(text).toContain('Opus 5.5 1M · ◕ high')
+    else expect(text).not.toContain('Opus')
     // The desktop draws the bars as images; the terminal as text.
     const hasSvg = JSON.stringify(await band.drawn()).includes('"type":"Svg"')
     expect(hasSvg).toBe(surface !== 'terminal')
@@ -345,8 +348,8 @@ test('the status chips draw model, branch, context and usage above the prompt', 
       viewport: FULL,
       props: { hasSurvey: false, isWorking: false, maxRows: 10, bodyColumns: 140, scroll: { offset: 0, bodyRows: 10, contentRows: 0 }, view: {} } as never,
     })
-    if (surface === 'terminal') expect(flatten(await fullBand.drawn())).not.toContain('Opus')
-    else expect(flatten(await fullBand.drawn())).toContain('Opus 5.5 1M')
+    if (surface === 'terminal') expect(flatten(await fullBand.drawn())).not.toContain('ctx')
+    else expect(flatten(await fullBand.drawn())).toContain('ctx')
     await fullBand.unmount()
   }
 })
