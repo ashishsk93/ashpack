@@ -238,6 +238,11 @@ test('the desktop draws tool rows, group rows, diff and terminal cards; the spin
   on('config.list', () => ({ value: [{ key: 'theme', value: 'dark' }] }) as never)
   on('session.cwd', () => ({ value: '/repo' }) as never)
   let suffix = '' // what the skin hands Claude Code's spinner to draw after the word
+  let compactOn = false // stands in for ashpack-status' compact switch
+  on('state.get', ($, e, next) => {
+    const { plugin, key } = e as { plugin: string; key: string } // another plugin's value: not in this contract
+    return plugin === 'ashpack-status' && key === 'compact' ? ({ value: { value: compactOn, version: 1 } } as never) : next(e)
+  })
   on('ui.render', { component: ['ToolResult', 'ToolUse', 'ToolGroup', 'Spinner'] }, ($, e) => {
     if (e.component === 'Spinner') suffix = (e.props as { suffix: string }).suffix
     const { Text } = $.ui.resolve(e)
@@ -292,6 +297,11 @@ test('the desktop draws tool rows, group rows, diff and terminal cards; the spin
 
   // The spinner: a wave in the skin's accent; the terminal puts it after Claude Code's word.
   const spinProps = { word: 'Baking', message: 'Reading auth.ts', suffix: '…', mode: 'tool-use' }
+  // With ashpack-status' compact mode on, skins step aside: the mods beneath hide the rows.
+  compactOn = true
+  expect(await drawnOf(await mount('desktop', 'ToolUse', { tool_use_id: 'e1', tool: 'Edit', input: { file_path: '/repo/src/auth.ts' }, isRunning: false, isErrored: false, isInterrupted: false }))).toContain('engine-ToolUse')
+  expect(await drawnOf(await mount('desktop', 'ToolGroup', { calls, isActive: false, isExpanded: false }))).toContain('engine-ToolGroup')
+  compactOn = false
   const spin = await drawnOf(await mount('desktop', 'Spinner', spinProps))
   for (const part of ['"type":"Svg"', 'Reading auth.ts', '<animate attributeName=\\"height\\"', p.accent]) expect(spin).toContain(part)
   await drawnOf(await mount('terminal', 'Spinner', spinProps))

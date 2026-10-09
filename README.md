@@ -39,7 +39,7 @@ Twelve skins: Catppuccin, Dracula, Nord, Gruvbox, Tokyo Night, Rosé Pine, Solar
 | Spinner | A wave in the skin's accent, beside the step the app names | The skin's word, then a wave (`▃▆██`) |
 | Your prompts | A rounded outline sized to what you typed | The same |
 
-Cards have no background of their own, and their rows rise in only when a card is new: a redraw (a resize, the side panel opening) shows it still. With ashpack-status' compact mode on, tool calls are not shown. The stored conversation, and what the model reads, do not change.
+Cards have no background of their own, and their rows rise in only when a card is new: a redraw (a resize, the side panel opening) shows it still. With ashpack-status' compact mode on, tool calls are not shown, whatever the plugin order. The stored conversation, and what the model reads, do not change.
 
 The picker is the **Skins** page of the AshPack drawer: run `/skin`, or open the drawer and click **Skins**. Without AshPack, `/skin` opens it in a panel of its own. Click a card (in the desktop app, the skin's name above the card) or press its key to apply it. Two switches sit above the cards:
 

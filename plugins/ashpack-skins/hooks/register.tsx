@@ -53,6 +53,15 @@ const EDITS = new Set(['Edit', 'Write', 'MultiEdit'])
 
 type Active = { skin: Skin; p: Palette }
 
+// ashpack-status' compact mode hides tool rows and the spinner: skins step aside for
+// them, whatever the plugin order. Read while drawing, so a flip redraws them.
+const COMPACT = { plugin: 'ashpack-status', key: 'compact' } as const
+
+async function isCompact($: EngineInterface): Promise<boolean> {
+  const held = await $.state.get(COMPACT as never).catch(() => undefined)
+  return held?.value === true
+}
+
 async function active($: EngineInterface): Promise<Active | null> {
   const [id, skinsOn, light] = await Promise.all([read($, chosen), read($, isOn), read($, isLight)])
   const skin = skinsOn ? skinById(id) : undefined
@@ -542,6 +551,7 @@ export const register: Register = on => {
   // A tool row: on the desktop its icon, the tool, its target, lines changed and time
   // taken; on the terminal the tool and its target.
   on('ui.render', { component: 'ToolUse' }, async ($, e, next) => {
+    if (await isCompact($)) return next(e)
     const kind = kindOf(e.props.tool)
     const a = kind ? await active($) : null
     if (!kind || !a) return next(e)
@@ -568,6 +578,7 @@ export const register: Register = on => {
 
   // A run of calls folded into one line: our row on the desktop, Claude Code's on the terminal.
   on('ui.render', { component: 'ToolGroup' }, async ($, e, next) => {
+    if (await isCompact($)) return next(e)
     const a = e.surface !== 'terminal' && !e.props.isExpanded ? await active($) : null
     return (a && groupRowTree($, e, a.p)) ?? next(e)
   })
@@ -575,6 +586,7 @@ export const register: Register = on => {
   // On the desktop, an edit's result as a diff card and a shell command's in a terminal
   // card. The terminal keeps Claude Code's own diff and output.
   on('ui.render', { component: 'ToolResult' }, async ($, e, next) => {
+    if (await isCompact($)) return next(e)
     const a = e.surface !== 'terminal' ? await active($) : null
     if (!a) return next(e)
     const width = cardWidth(e.viewport?.columns)
@@ -618,6 +630,7 @@ export const register: Register = on => {
   // tokens), says the skin's word and puts the wave after it; the desktop draws the wave
   // beside the step the app names.
   on('ui.render', { component: 'Spinner' }, async ($, e, next) => {
+    if (await isCompact($)) return next(e)
     if (e.surface === 'terminal') terminalSeen = true
     const a = await active($)
     if (!a) return next(e)
