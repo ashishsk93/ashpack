@@ -300,7 +300,8 @@ test('the status rows draw model, branch, context and usage bars above the promp
     }
     await band.unmount()
 
-    // Fullscreen: the grid sits under the prompt, above the engine's hint line.
+    // The fullscreen terminal: the grid sits under the prompt, above the engine's hint line.
+    // The desktop reports fullscreen too, but draws nothing of a mod's under its prompt: the grid stays above.
     const hint = await $.ui.mount({
       plugin: 'ashpack',
       surface,
@@ -309,8 +310,10 @@ test('the status rows draw model, branch, context and usage bars above the promp
       props: { isDraft: false, isWorking: false, hint: '⏵⏵ auto mode on' },
     })
     const hintText = flatten(await hint.drawn())
-    expect(hintText).toContain('◆ Opus 5.5 1M')
-    expect(hintText.indexOf('ctx')).toBeLessThan(hintText.indexOf('auto mode on'))
+    if (surface === 'terminal') {
+      expect(hintText).toContain('◆ Opus 5.5 1M')
+      expect(hintText.indexOf('ctx')).toBeLessThan(hintText.indexOf('auto mode on'))
+    } else expect(hintText).not.toContain('Opus')
     await hint.unmount()
 
     const fullBand = await $.ui.mount({
@@ -320,7 +323,8 @@ test('the status rows draw model, branch, context and usage bars above the promp
       viewport: FULL,
       props: { hasSurvey: false, isWorking: false, maxRows: 10, bodyColumns: 140, scroll: { offset: 0, bodyRows: 10, contentRows: 0 }, view: {} } as never,
     })
-    expect(flatten(await fullBand.drawn())).not.toContain('Opus')
+    if (surface === 'terminal') expect(flatten(await fullBand.drawn())).not.toContain('Opus')
+    else expect(flatten(await fullBand.drawn())).toContain('Opus 5.5 1M')
     await fullBand.unmount()
   }
 })

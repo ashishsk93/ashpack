@@ -104,6 +104,12 @@ function refreshStatus($: EngineInterface): void {
   void loadStatus($).catch(err => $.ui.log(`ashpack status: ${String(err)}`, { to: 'debug' }))
 }
 
+// Where the status rows go: under the prompt (PromptHint) on the fullscreen terminal,
+// above it (AbovePrompt) everywhere else. The desktop reports fullscreen, since it docks
+// panes, but draws no mod tree under its prompt.
+const isUnderPrompt = (e: { surface: string; viewport?: { isFullscreen?: boolean } }): boolean =>
+  e.surface === 'terminal' && e.viewport?.isFullscreen === true
+
 // The grid as a tree: each section a fixed-width Box, so the rows line up.
 function drawGrid($: EngineInterface, e: RenderInput<'PromptHint'> | RenderInput<'AbovePrompt'>, data: StatusData, now: number, total: number) {
   const { Box, Text } = $.ui.resolve(e)
@@ -521,8 +527,7 @@ export const register: Register = on => {
       $.clock.now(),
     ])
     const showPopup = isCompactOn && e.props.isWorking
-    // In fullscreen the grid sits under the prompt (PromptHint); here it is the fallback.
-    const showStatus = isOn && data !== null && e.viewport?.isFullscreen !== true
+    const showStatus = isOn && data !== null && !isUnderPrompt(e)
     if (!showPopup && !showStatus) return below
 
     const { Box, Text } = $.ui.resolve(e)
@@ -544,7 +549,7 @@ export const register: Register = on => {
   // ── under the prompt (fullscreen): the grid, then the engine's hint line ──
   on('ui.render', { component: 'PromptHint' }, async ($, e, next) => {
     const below = await next(e)
-    if (e.viewport?.isFullscreen !== true) return below
+    if (!isUnderPrompt(e)) return below
     const [isOn, data, now] = await Promise.all([read($, statusOn), read($, status), $.clock.now()])
     if (!isOn || data === null) return below
     const { Box } = $.ui.resolve(e)
