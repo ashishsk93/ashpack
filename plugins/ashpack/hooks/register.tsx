@@ -1,619 +1,220 @@
 import { atom, read, update } from 'claude-code'
-import type { EngineInterface, Register, RenderElement, RenderInput, Timer } from 'claude-code'
+import type { EngineInterface, Register, RenderElement, RenderInput } from 'claude-code'
 
-import type { Activity, PackMod, Section, StatusData } from '../types'
-import type { Page, Segment, TextSpan } from './format'
-import {
-  addTask,
-  around,
-  COLORS,
-  describeTool,
-  findPages,
-  barPx,
-  barSpans,
-  barSvg,
-  chipBarWidth,
-  isBar,
-  parseGit,
-  packMods,
-  planFromTodos,
-  popupWidth,
-  segments,
-  statusChips,
-  TRAIL,
-  updateTask,
-  wave,
-  waveSvg,
-} from './format'
+import type { Page } from './format'
+import { ACCENT, findChips, findPages, HOST, misplaced, stepTab, withHostFirst, withoutChips } from './format'
 
-// AshPack. Everything that touches `$` lives in this one file (the engine
-// follows `$` only into functions of the same file):
-//   - status grid: 2 rows x 3 sections under the prompt, above the engine's hint
-//     line ("auto mode on"); outside fullscreen, where that line is one row,
-//     it moves to the band above the prompt
-//   - compact mode: tool rows hidden, a working popup above the prompt
-//   - drawer: "◆ AshPack" in the footer opens a side pane of pages: Home (the
-//     toggles), a page for each mod that draws one into the pane, and Mods
-// The drawer needs ashpack outermost: first in enabledPlugins (settings.json),
-// so the mods' pages are in the tree its pane hook gets from `next`.
+// AshPack: the host. One side panel (the drawer) with a page per mod, and one strip
+// above the prompt with a chip per mod, so mods do not fight for the footer or the band.
+// It draws nothing of its own but the drawer, the footer button and the strip; the
+// status chips, compact mode and skins are mods of their own that adopt it.
+// The host must be outermost (first in enabledPlugins): the pages and chips of the
+// mods beneath it are in the trees `next(e)` hands it.
 
 const DRAWER = 'ashpack' // the drawer pane's id; mods hook its render to add a page
 const DRAWER_COLUMNS = 64
-const STATUS_TICK_MS = 30_000
-const FRAME_MS = 120
-const POPUP_ROWS = 5 // sections the working popup shows at most
-const LOADER_PX = 120 // the desktop loader's width, in CSS pixels
-const LOADER_CELLS = 12 // the terminal loader's width at most
-const ACCENT = COLORS.accent
-const BLUE = COLORS.blue
-const PACK = 'ashpack' // the marketplace the pack's mods come from
-const CLI_TIMEOUT_MS = 120_000
-const COMPACT_KEY = 'compact' // $.store keys: toggles survive sessions
-const STATUS_KEY = 'statusOn'
-
-// The loader and the model chip wear the skin's accent when one is on.
-const loaderColor = async ($: EngineInterface): Promise<string> => (await skinAccent($)) || BLUE
-const accentColor = async ($: EngineInterface): Promise<string> => (await skinAccent($)) || ACCENT
-
-const compact = atom({ plugin: 'ashpack', key: 'compact' } as const, false)
-const statusOn = atom({ plugin: 'ashpack', key: 'statusOn' } as const, true)
-const activity = atom({ plugin: 'ashpack', key: 'activity' } as const, null as Activity | null)
-const frame = atom({ plugin: 'ashpack', key: 'frame' } as const, 0)
-const status = atom({ plugin: 'ashpack', key: 'status' } as const, null as StatusData | null)
-const drawerOpen = atom({ plugin: 'ashpack', key: 'drawerOpen' } as const, false)
-const page = atom({ plugin: 'ashpack', key: 'page' } as const, 'home')
-const plan = atom({ plugin: 'ashpack', key: 'plan' } as const, [] as Section[])
-const pack = atom({ plugin: 'ashpack', key: 'pack' } as const, [] as PackMod[])
-const packBusy = atom({ plugin: 'ashpack', key: 'packBusy' } as const, null as string | null)
-
-// ── status rows: data ────────────────────────────────────────────────────────
-
-type Seen = { effort?: string }
-
-// Effort arrives only on the classic hook inputs, so the grid shows what the
-// last one said. (The permission mode is the engine's own hint line, just below.)
-let seen: Seen = {}
-const see = (e: { effort?: { level: string } }): void => {
-  seen = { effort: e.effort?.level ?? seen.effort }
-}
-
-async function gitInfo($: EngineInterface) {
-  try {
-    const { exitCode, stdout } = await $.process.run(['git', 'status', '--porcelain=v2', '--branch'], { timeoutMs: 3000 })
-    return exitCode === 0 ? parseGit(stdout) : null
-  } catch {
-    return null
-  }
-}
-
-async function seenFromSettings($: EngineInterface): Promise<Seen> {
-  const s = await $.settings.read()
-  return { effort: typeof s.effortLevel === 'string' ? s.effortLevel : undefined }
-}
-
-async function loadStatus($: EngineInterface): Promise<void> {
-  const [model, usage, git, cwd] = await Promise.all([$.session.model(), $.session.usage(), gitInfo($), $.session.cwd()])
-  const data: StatusData = {
-    model,
-    effort: seen.effort,
-    contextPercent: usage.context.percent,
-    rateLimits: usage.rateLimits.map(r => ({ kind: r.kind, percentUsed: r.percentUsed, resetsAt: r.resetsAt })),
-    git,
-    folder: cwd.split('/').pop() || cwd,
-    costUsd: usage.cost?.usd,
-    startedAt: usage.startedAt,
-  }
-  await update($, status, () => data)
-}
-
-// Never lets the status rows break the event they ride on.
-function refreshStatus($: EngineInterface): void {
-  void loadStatus($).catch(err => $.ui.log(`ashpack status: ${String(err)}`, { to: 'debug' }))
-}
-
-// Where the status chips go: under the prompt (PromptHint) on the fullscreen terminal,
-// above it (AbovePrompt) everywhere else. The desktop reports fullscreen, since it docks
-// panes, but draws no mod tree under its prompt; its footer is a one-line strip that
-// truncates, so the chips cannot go there either. In the band, the working popup takes
-// the chips' place while Claude works, so the two never stack.
-const isUnderPrompt = (e: { surface: string; viewport?: { isFullscreen?: boolean } }): boolean =>
-  e.surface === 'terminal' && e.viewport?.isFullscreen === true
-
-type StatusSite = RenderInput<'PromptHint'> | RenderInput<'AbovePrompt'>
-
-// The chips as a tree. The desktop: one strip, the bars as images (its font sets the
-// segment glyphs at odd heights), wide gaps between the chips. The terminal: a spaced
-// row of text. Both wrap when the row is short.
-function drawChips($: EngineInterface, e: StatusSite, data: StatusData, now: number, total: number, accent: string) {
-  const { Box, Text } = $.ui.resolve(e)
-  const isTerminal = e.surface === 'terminal'
-  const chips = statusChips(data, now, chipBarWidth(total), accent, isTerminal)
-  // Svg is not in the terminal's table: resolved only off it.
-  const Svg = e.surface === 'terminal' ? null : $.ui.resolve(e).Svg
-  const text = (sp: TextSpan, key: string) => (
-    <Text key={key} color={sp.color} dimColor={sp.dim} bold={sp.bold}>
-      {sp.text}
-    </Text>
-  )
-  return (
-    <Box flexWrap="wrap" columnGap={isTerminal ? 2 : 3} rowGap={isTerminal ? 0 : 1}>
-      {chips.map((spans, c) => (
-        <Box key={`chip-${c}`} alignItems="center">
-          {spans.map((sp, i) => {
-            const key = `cell-${c}-${i}`
-            if (!isBar(sp)) return text(sp, key)
-            if (isTerminal || !Svg) return <Text key={key}>{barSpans(sp).map((t, j) => text(t, `${key}-${j}`))}</Text>
-            return <Svg key={key} source={barSvg(sp.bar, sp.width)} alt={`${Math.round(sp.bar)}%`} width={barPx(sp.width)} height={7} />
-          })}
-        </Box>
-      ))}
-    </Box>
-  )
-}
-
-// Everything the chips read, in one go.
-async function statusInputs($: EngineInterface): Promise<[boolean, StatusData | null, number, string]> {
-  return Promise.all([read($, statusOn), read($, status), $.clock.now(), accentColor($)])
-}
-
-// ── compact mode ─────────────────────────────────────────────────────────────
-
-let ticker: Timer | undefined
-let terminalSeen = false // a terminal has drawn: the frame ticker has a reader
-
-function stopTicker(): void {
-  ticker?.cancel()
-  ticker = undefined
-}
-
-async function resetActivity($: EngineInterface): Promise<void> {
-  stopTicker()
-  await update($, activity, () => null)
-}
-
-function isCompact($: EngineInterface): Promise<boolean> {
-  return read($, compact)
-}
-
-const seconds = (ms: number): string => {
-  const s = Math.max(0, Math.floor(ms / 1000))
-  return s < 60 ? `${s}s` : `${Math.floor(s / 60)}m ${s % 60}s`
-}
-
-// The Skins mod's active accent ('' while skins are off), so the loader wears the skin.
+const PAGE_KEY = 'page' // $.store: the page shown and whether the drawer was open, across sessions
+const OPEN_KEY = 'open'
+const NOTICE_KEY = 'split-notice' // $.store: the 0.9.5 split was mentioned once
+const STATUS_MOD = 'ashpack-status@ashpack'
 const SKIN_ACCENT = { plugin: 'ashpack-skins', key: 'accent' } as const
 
-// The skin's accent, or '' with no Skins mod or skins off. Reading it while drawing
+const drawerOpen = atom({ plugin: 'ashpack', key: 'drawerOpen' } as const, false)
+const page = atom({ plugin: 'ashpack', key: 'page' } as const, 'home')
+const isMisplaced = atom({ plugin: 'ashpack', key: 'misplaced' } as const, false)
+
+// The skin's accent when one is on, else the host's own. Reading it while drawing
 // redraws the site when the skin changes.
-async function skinAccent($: EngineInterface): Promise<string> {
+async function accentColor($: EngineInterface): Promise<string> {
   const held = await $.state.get(SKIN_ACCENT as never).catch(() => undefined)
   const value: unknown = held?.value
-  return typeof value === 'string' ? value : ''
+  return typeof value === 'string' && value !== '' ? value : ACCENT
 }
 
+const enabledOf = async ($: EngineInterface): Promise<Record<string, unknown>> =>
+  ((await $.settings.read()).enabledPlugins ?? {}) as Record<string, unknown>
 
-
-// The running section's loader: redrawn per frame on the terminal; an SVG that
-// animates itself elsewhere, so the desktop never redraws for it.
-function loader($: EngineInterface, e: RenderInput<'AbovePrompt'>, f: number, cells: number, color: string) {
-  if (e.surface !== 'terminal') {
-    const { Svg } = $.ui.resolve(e)
-    return <Svg key="loader" source={waveSvg(color, LOADER_PX)} alt="Working" />
-  }
-  const { Text } = $.ui.resolve(e)
-  return (
-    <Text key="loader" color={color}>
-      {wave(f, Math.min(cells, LOADER_CELLS))}
-    </Text>
-  )
+async function checkOrder($: EngineInterface): Promise<void> {
+  const user = await $.settings.read({ source: 'user' })
+  await update($, isMisplaced, () => misplaced(user.enabledPlugins))
 }
 
-const MARK: Record<Segment['state'], string> = { done: '✓', now: '▸', todo: '○' }
-
-// The working popup, half the band wide: what it is doing, then a row per section,
-// the finished ones ticked and the running one with the loader beside it.
-async function drawPopup($: EngineInterface, e: RenderInput<'AbovePrompt'>, a: Activity | null, now: number) {
-  const { Box, Text } = $.ui.resolve(e)
-  const isTerminal = e.surface === 'terminal'
-  // Reading `frame` redraws per tick: the terminal only.
-  const [list, f, color] = await Promise.all([read($, plan), isTerminal ? read($, frame) : 0, loaderColor($)])
-  const width = popupWidth(e.props.bodyColumns)
-  const inner = width - 4 // border and padding
-  const titleWidth = Math.floor(inner * 0.55)
-  const isTrail = list.length === 0
-  const segs = around(segments(list, a?.label ?? 'Thinking', a?.trail ?? []), POPUP_ROWS)
-  const done = list.filter(s => s.status === 'completed').length
-  const facts = [
-    list.length > 0 ? `${done}/${list.length}` : '',
-    a && isTerminal ? seconds(now - a.startedAt) : '', // the desktop draws no ticks, so the time would stand still
-    a && a.steps > 0 ? `${a.steps} step${a.steps === 1 ? '' : 's'}` : '',
-  ].filter(Boolean)
-  return (
-    <Box flexDirection="column" borderStyle="round" borderColor={ACCENT} paddingX={1} width={width}>
-      <Box justifyContent="space-between" columnGap={2}>
-        <Text wrap="truncate-end">
-          <Text bold color={ACCENT}>
-            ◆ AshPack
-          </Text>
-          {/* The trail's running section names the step; a task list's sections are the tasks. */}
-          {isTrail ? null : <Text> {a?.label ?? 'Working'}…</Text>}
-        </Text>
-        <Text dimColor>{facts.join(' · ')}</Text>
-      </Box>
-      {segs.map((s, i) => (
-        <Box key={`seg-${i}`} columnGap={1}>
-          <Box width={titleWidth}>
-            <Text
-              wrap="truncate-end"
-              bold={s.state === 'now'}
-              color={s.state === 'now' ? ACCENT : s.state === 'done' ? COLORS.ok : undefined}
-              dimColor={s.state === 'todo'}
-            >
-              {MARK[s.state]} {s.title}
-              {s.state === 'now' && isTrail ? '…' : ''}
-            </Text>
-          </Box>
-          {s.state === 'now' ? loader($, e, f, inner - titleWidth - 1, color) : null}
-        </Box>
-      ))}
-    </Box>
-  )
-}
-
-// A row compact mode leaves out: dropped on the terminal, empty on the desktop app (which
-// draws its own row for a `display: none` answer).
-function emptyRow($: EngineInterface, e: RenderInput<'ToolUse'> | RenderInput<'ToolResult'> | RenderInput<'ToolGroup'>) {
-  const { Box } = $.ui.resolve(e)
-  return e.surface === 'terminal' ? <Box display="none" /> : <Box />
-}
-
-// ── drawer ───────────────────────────────────────────────────────────────────
-
-// The pack's mods: its marketplace's catalog, against what is installed and on.
-async function loadPack($: EngineInterface): Promise<void> {
+// Moves the host to the front of enabledPlugins in ~/.claude/settings.json, then hands
+// the prompt box "/reload-plugins" to send.
+async function fixOrder($: EngineInterface): Promise<void> {
   try {
-    const home = await $.env.get('HOME')
-    const [known, installed, settings] = await Promise.all([
-      $.fs.read(`${home}/.claude/plugins/known_marketplaces.json`),
-      $.fs.read(`${home}/.claude/plugins/installed_plugins.json`),
-      $.settings.read(),
-    ])
-    const where = (JSON.parse(known) as Record<string, { installLocation?: string }>)[PACK]?.installLocation
-    if (!where) throw new Error(`marketplace "${PACK}" is not added`)
-    const catalog = await $.fs.read(`${where}/.claude-plugin/marketplace.json`)
-    const enabled = (settings.enabledPlugins ?? {}) as Record<string, unknown>
-    await update($, pack, () => packMods(catalog, installed, enabled, PACK))
-  } catch (err) {
-    $.ui.log(`ashpack mods: ${String(err)}`, { to: 'debug' })
-    await update($, pack, () => [])
-  }
-}
-
-// A mod's button: on -> disable, off -> enable, missing -> install; null updates the pack.
-// A mod cannot reload plugins, so the prompt box is handed "/reload-plugins" to send.
-async function packAction($: EngineInterface, mod: PackMod | null): Promise<void> {
-  if ((await read($, packBusy)) !== null) return
-  const installed = (await read($, pack)).filter(m => m.state !== 'missing')
-  const runs: string[][] = mod
-    ? [['claude', 'plugin', mod.state === 'on' ? 'disable' : mod.state === 'off' ? 'enable' : 'install', `${mod.name}@${PACK}`]]
-    : [['claude', 'plugin', 'marketplace', 'update', PACK], ...installed.map(m => ['claude', 'plugin', 'update', `${m.name}@${PACK}`])]
-  await update($, packBusy, () => mod?.name ?? 'update')
-  try {
-    for (const argv of runs) {
-      const { exitCode, stdout, stderr } = await $.process.run(argv, { timeoutMs: CLI_TIMEOUT_MS })
-      if (exitCode !== 0) throw new Error((stderr || stdout).trim().split('\n')[0] || `${argv.join(' ')} failed`)
-    }
-    const done = mod ? `${mod.name} ${mod.state === 'on' ? 'off' : mod.state === 'off' ? 'on' : 'installed'}` : 'Pack updated'
-    $.ui.toast(`AshPack: ${done}. Press Enter to reload plugins.`)
+    const path = `${await $.env.get('HOME')}/.claude/settings.json`
+    await $.fs.write(path, withHostFirst(await $.fs.read(path)))
+    await update($, isMisplaced, () => false)
+    $.ui.toast('AshPack is first in enabledPlugins. Press Enter to reload plugins.')
     await $.prompt.fill({ text: '/reload-plugins' })
   } catch (err) {
     $.ui.toast(`AshPack: ${err instanceof Error ? err.message : String(err)}`)
-  } finally {
-    await update($, packBusy, () => null)
-    await loadPack($)
   }
 }
 
-// The drawer is a side pane on every surface (docked beside a fullscreen
-// transcript, inline above the prompt on the terminal's main screen).
+// 0.9.5 moved the status chips and compact mode to ashpack-status: said once.
+async function noticeSplit($: EngineInterface): Promise<void> {
+  if ((await $.store.get(NOTICE_KEY)) === true) return
+  await $.store.set(NOTICE_KEY, true)
+  if ((await enabledOf($))[STATUS_MOD] === true) return
+  $.ui.toast('AshPack 0.9.5: the status chips and compact mode are now the ashpack-status mod: /plugin install ashpack-status@ashpack', { timeoutMs: 12_000 })
+}
+
+// The drawer is a side pane on every surface (docked beside a fullscreen transcript,
+// inline above the prompt on the terminal's main screen).
 async function openDrawer($: EngineInterface, pageId?: string): Promise<void> {
-  if (pageId) await update($, page, () => pageId)
-  await loadPack($)
+  if (pageId) await showPage($, pageId)
   await update($, drawerOpen, () => true)
+  await $.store.set(OPEN_KEY, true)
   await $.ui.open({ id: DRAWER, title: 'AshPack', focus: true, closeOnEscape: true, columns: DRAWER_COLUMNS })
+}
+
+async function closeDrawer($: EngineInterface): Promise<void> {
+  await update($, drawerOpen, () => false)
+  await $.store.set(OPEN_KEY, false)
+  await $.ui.close({ id: DRAWER })
+}
+
+async function showPage($: EngineInterface, id: string): Promise<void> {
+  await update($, page, () => id)
+  await $.store.set(PAGE_KEY, id)
 }
 
 type PaneInput = RenderInput<'Pane'>
 
-// A toggle as a setting: its name and what it does on the left, the switch on the right.
-function settingRow($: EngineInterface, e: PaneInput, key: string, label: string, hint: string, isOn: boolean, onPress: () => unknown) {
+// Home: the mods with a page, the plugin order when it is wrong, and how to adopt.
+function homePage($: EngineInterface, e: PaneInput, pages: readonly Page[], misplacedNow: boolean, accent: string) {
   const { Box, Button, Text } = $.ui.resolve(e)
   return (
-    <Box key={`setting-${key}`} justifyContent="space-between" columnGap={2}>
-      <Box flexDirection="column" flexShrink={1}>
-        <Text bold>{label}</Text>
-        <Text dimColor>{hint}</Text>
-      </Box>
-      <Button key={key} plain dimColor={!isOn} label={isOn ? '● ON ' : '○ OFF'} onPress={onPress} />
-    </Box>
-  )
-}
-
-function homePage($: EngineInterface, e: PaneInput, isCompactOn: boolean, isStatusOn: boolean, pages: readonly Page[]) {
-  const { Box, Text } = $.ui.resolve(e)
-  return (
     <Box key="page-home" flexDirection="column" rowGap={1}>
-      {settingRow($, e, 'compact', 'Compact mode', 'Tool rows fold away; a popup above the prompt shows the work.', isCompactOn, () => toggle($, 'compact'))}
-      {settingRow($, e, 'status', 'Status rows', 'Model, branch, context and usage by the prompt.', isStatusOn, () => toggle($, 'statusOn'))}
-      <Text dimColor>
-        {pages.length > 0
-          ? `Pages from your mods: ${pages.map(p => p.label).join(', ')}.`
-          : 'Mods that support AshPack show their own page here.'}
+      {misplacedNow ? (
+        <Box flexDirection="column" borderStyle="round" borderColor="#a87700" paddingX={1}>
+          <Text bold>Another mod sits above AshPack</Text>
+          <Text dimColor wrap="wrap">
+            The drawer holds the pages and chips of the mods beneath it only. Put "{HOST}" first in enabledPlugins in ~/.claude/settings.json, or:
+          </Text>
+          <Button key="fix-order" plain label="↑ move AshPack first" onPress={() => fixOrder($)} />
+        </Box>
+      ) : null}
+      <Box flexDirection="column">
+        <Text bold>Pages</Text>
+        {pages.length > 0 ? (
+          pages.map(p => (
+            <Box key={`home-page-${p.id}`} columnGap={1}>
+              <Text color={accent}>●</Text>
+              <Button key={`home-open-${p.id}`} plain label={p.label} onPress={() => showPage($, p.id)} />
+            </Box>
+          ))
+        ) : (
+          <Text dimColor>No mod has a page yet.</Text>
+        )}
+      </Box>
+      <Text dimColor wrap="wrap">
+        A mod joins with one Box keyed "ashpack-page:Label" in the drawer, or "ashpack-chip:label" in the strip above the prompt. See ADOPTING.md in the ashpack repo.
       </Text>
     </Box>
   )
 }
 
-
-const ACTION: Record<PackMod['state'], string> = { on: 'turn off', off: 'turn on', missing: 'install' }
-const STATE: Record<PackMod['state'], [string, string | undefined]> = { on: ['●', COLORS.ok], off: ['○', undefined], missing: ['+', undefined] }
-
-// The pack's mods, one row each with what a press does, then the pack's update.
-function modsPage($: EngineInterface, e: PaneInput, mods: readonly PackMod[], busy: string | null) {
+// The tab bar: a tab per page, the shown one lit and underlined (the terminal) or bright
+// (elsewhere). On the terminal, n and p step through the tabs.
+function tabBar($: EngineInterface, e: PaneInput, tabs: readonly { id: string; label: string }[], shown: string, accent: string) {
   const { Box, Button, Text } = $.ui.resolve(e)
-  if (mods.length === 0) return <Text dimColor>No "{PACK}" marketplace found.</Text>
-  return (
-    <Box key="page-mods" flexDirection="column" rowGap={1}>
-      <Box flexDirection="column">
-        {mods.map(m => {
-          const [mark, color] = STATE[m.state]
-          return (
-            <Box key={`mod-row-${m.name}`} justifyContent="space-between" columnGap={2}>
-              <Text wrap="truncate-end">
-                <Text color={m.name === PACK ? ACCENT : color} dimColor={m.state !== 'on'}>
-                  {m.name === PACK ? '◆' : mark}
-                </Text>
-                <Text dimColor={m.state !== 'on'}> {m.name}</Text>
-              </Text>
-              {m.name === PACK ? (
-                <Text dimColor>this pack</Text>
-              ) : (
-                <Button key={`mod-${m.name}`} plain dimColor label={busy === m.name ? '…' : ACTION[m.state]} onPress={() => packAction($, m)} />
-              )}
-            </Box>
-          )
-        })}
-      </Box>
-      <Box justifyContent="space-between" columnGap={2}>
-        <Text dimColor>Changes apply after /reload-plugins.</Text>
-        <Button key="mods-update" plain label={busy === 'update' ? '… updating' : '↻ update all'} onPress={() => packAction($, null)} />
-      </Box>
-    </Box>
-  )
-}
-
-// The tab bar: a tab per page, the shown one lit and underlined (the terminal) or bright (elsewhere).
-function tabBar($: EngineInterface, e: PaneInput, tabs: readonly { id: string; label: string }[], shown: string) {
-  const { Box, Button, Text } = $.ui.resolve(e)
+  const ids = tabs.map(t => t.id)
   return (
     <Box key="tabs" columnGap={2} flexWrap="wrap">
       {tabs.map(t => {
         const isShown = t.id === shown
         return (
           <Box key={`tab-${t.id}`} flexDirection="column">
-            <Button key={`page-${t.id}`} plain dimColor={!isShown} label={t.label} onPress={() => update($, page, () => t.id)} />
+            <Button key={`page-${t.id}`} plain dimColor={!isShown} label={t.label} onPress={() => showPage($, t.id)} />
             {e.surface === 'terminal' ? (
-              <Text color={isShown ? ACCENT : undefined} dimColor={!isShown}>
+              <Text color={isShown ? accent : undefined} dimColor={!isShown}>
                 {(isShown ? '━' : '─').repeat([...t.label].length)}
               </Text>
             ) : null}
           </Box>
         )
       })}
+      {e.surface === 'terminal' && tabs.length > 1 ? (
+        <Box columnGap={1}>
+          <Button key="tab-prev" plain dimColor hotkey="p" label="‹p" onPress={() => showPage($, stepTab(ids, shown, -1))} />
+          <Button key="tab-next" plain dimColor hotkey="n" label="n›" onPress={() => showPage($, stepTab(ids, shown, 1))} />
+        </Box>
+      ) : null}
     </Box>
   )
 }
 
-async function closeDrawer($: EngineInterface): Promise<void> {
-  await update($, drawerOpen, () => false)
-  await $.ui.close({ id: DRAWER })
-}
-
-async function toggle($: EngineInterface, which: 'compact' | 'statusOn'): Promise<boolean> {
-  if (which === 'compact') {
-    const isOn = !(await read($, compact))
-    await update($, compact, () => isOn)
-    await $.store.set(COMPACT_KEY, isOn)
-    return isOn
-  }
-  const isOn = !(await read($, statusOn))
-  await update($, statusOn, () => isOn)
-  await $.store.set(STATUS_KEY, isOn)
-  return isOn
-}
-
-// Warns once per session when another plugin sits above ashpack.
-async function checkOrder($: EngineInterface): Promise<void> {
-  const user = await $.settings.read({ source: 'user' })
-  const first = Object.keys((user.enabledPlugins ?? {}) as Record<string, unknown>)[0]
-  if (first && !first.startsWith('ashpack@')) {
-    $.ui.toast('AshPack: put "ashpack@ashpack" first in enabledPlugins (~/.claude/settings.json) so the drawer can hold other mods.', {
-      timeoutMs: 10_000,
-    })
-  }
-}
-
 export const register: Register = on => {
-  // ── shared events ──
   on('session.start', async ($, e, next) => {
-    const [storedCompact, storedStatus] = await Promise.all([$.store.get(COMPACT_KEY), $.store.get(STATUS_KEY)])
-    await update($, compact, () => storedCompact === true)
-    await update($, statusOn, () => storedStatus !== false)
-    await resetActivity($)
-    $.ui.status(undefined) // 0.1.0 pinned a plain-text line; the rows replace it
     await $.command.register({
       name: 'ashpack',
-      description: 'Open the AshPack drawer; `/ashpack compact` or `/ashpack status` toggles one',
-      argumentHint: '[compact|status]',
+      description: 'Open the AshPack drawer, or a page of it: /ashpack skins',
+      argumentHint: '[page|close]',
     })
+    const [storedPage, storedOpen] = await Promise.all([$.store.get(PAGE_KEY), $.store.get(OPEN_KEY)])
+    if (typeof storedPage === 'string') await update($, page, () => storedPage)
     const started = await next(e)
-    seen = await seenFromSettings($).catch(() => seen)
-    refreshStatus($)
-    $.clock.every(STATUS_TICK_MS, () => refreshStatus($))
-    void checkOrder($).catch(() => undefined)
+    await checkOrder($).catch(() => undefined)
+    void noticeSplit($).catch(() => undefined)
+    // The drawer comes back as it was left; opened unasked it waits for a wide terminal.
+    if (storedOpen === true) await openDrawer($).catch(() => undefined)
     return started
   })
 
-  on('turn.start', async ($, e, next) => {
-    const now = await $.clock.now()
-    await update($, activity, () => ({ startedAt: now, label: 'Thinking', steps: 0, trail: [] }))
-    // A finished task list is the last turn's; a new one starts empty.
-    await update($, plan, p => (p.every(s => s.status === 'completed') ? [] : p))
-    stopTicker()
-    // Only the terminal reads `frame`; the desktop's loader animates itself, and a tick
-    // there would only redraw the transcript.
-    if (terminalSeen) ticker = $.clock.every(FRAME_MS, () => void update($, frame, n => (n + 1) % 100_000))
-    return next(e)
+  on('command.run', { command: 'ashpack' }, async ($, e) => {
+    const arg = e.args.trim().toLowerCase()
+    if (arg === 'close') {
+      await closeDrawer($)
+      return {}
+    }
+    // A word names a page (`/ashpack skins`); a page no mod draws shows Home.
+    await openDrawer($, arg || undefined)
+    return {}
   })
 
-  on('turn.complete', async ($, e, next) => {
-    if (!e.agentId) {
-      await resetActivity($)
-      refreshStatus($)
+  // The person closing the panel (Esc, its close mark) folds the drawer too.
+  on('ui.close', async ($, e, next) => {
+    if (e.id === DRAWER) {
+      await update($, drawerOpen, () => false)
+      await $.store.set(OPEN_KEY, false)
     }
     return next(e)
-  })
-
-  // ── status rows: when to refresh ──
-  on('session.measure', async ($, e, next) => {
-    const result = await next(e)
-    refreshStatus($)
-    return result
-  })
-  on('classic.SessionStart', ($, e, next) => (see(e), refreshStatus($), next(e))).catch(($, e, next) => next(e))
-  on('classic.UserPromptSubmit', ($, e, next) => (see(e), refreshStatus($), next(e))).catch(($, e, next) => next(e))
-  on('classic.PostToolUse', ($, e, next) => (see(e), next(e))).catch(($, e, next) => next(e))
-  on('classic.Stop', ($, e, next) => (see(e), refreshStatus($), next(e))).catch(($, e, next) => next(e))
-  // /model, the picker or a fallback: the model chip follows at once, not at the next tick.
-  on('classic.PostModelSwitch', ($, e, next) => (refreshStatus($), next(e))).catch(($, e, next) => next(e))
-
-  // ── compact mode: what the popup says, and the task list it splits into sections ──
-  on('tool.call', async ($, e, next) => {
-    const label = describeTool(String(e.tool), e)
-    await update($, activity, a => a && { ...a, label, steps: a.steps + 1 })
-    const isMain = !e.agentId // a subagent's list is its own
-    if (isMain && e.tool === 'TodoWrite') await update($, plan, () => planFromTodos(e.todos))
-    if (isMain && e.tool === 'TaskUpdate') await update($, plan, p => updateTask(p, e))
-    const result = await next(e)
-    if (isMain && e.tool === 'TaskCreate') {
-      const id = (result.result as { task?: { id?: unknown } } | undefined)?.task?.id
-      if (typeof id === 'string') await update($, plan, p => addTask(p, id, e.subject))
-    }
-    // The step joins the trail; the line goes back to thinking unless another call took it.
-    await update($, activity, a => a && { ...a, label: a.label === label ? 'Thinking' : a.label, trail: [...a.trail, label].slice(-TRAIL) })
-    return result
   }).catch(($, e, next) => next(e))
 
-  // ── compact mode: hidden rows (an invisible Box); ctrl+o still shows all ──
-  // Compact mode: no tool rows. The terminal drops the row (display none); the desktop
-  // app draws its own row for a `display: none` answer, so there it gets an empty one.
-  on('ui.render', { component: 'ToolUse' }, async ($, e, next) => {
-    if (!(await isCompact($))) return next(e)
-    return emptyRow($, e)
-  })
-
-  on('ui.render', { component: 'ToolResult' }, async ($, e, next) => {
-    if (!(await isCompact($))) return next(e)
-    return emptyRow($, e)
-  })
-
-  on('ui.render', { component: 'ToolGroup' }, async ($, e, next) => {
-    if (e.props.isExpanded || !(await isCompact($))) return next(e)
-    return emptyRow($, e)
-  })
-
-  on('ui.render', { component: 'ToolProgress' }, async ($, e, next) =>
-    (await isCompact($)) ? next({ ...e, props: { ...e.props, hint: '' } }) : next(e),
-  )
-
-  // The popup replaces the engine's spinner line.
-  on('ui.render', { component: 'Spinner' }, async ($, e, next) => {
-    if (!(await isCompact($))) return next(e)
-    const { Box } = $.ui.resolve(e)
-    return <Box display="none" />
-  })
-
-  // ── the band above the prompt: working popup, status rows, then other mods' band ──
-  on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => {
-    const below = await next(e)
-    if (e.props.hasSurvey) return below
-    if (e.surface === 'terminal') terminalSeen = true
-    const [[isOn, data, now, accent], isCompactOn, a] = await Promise.all([statusInputs($), isCompact($), read($, activity)])
-    const showPopup = isCompactOn && e.props.isWorking
-    const showStatus = isOn && data !== null && !isUnderPrompt(e) && !showPopup
-    if (!showPopup && !showStatus) return below
-
-    const { Box } = $.ui.resolve(e)
-    const popup = showPopup ? await drawPopup($, e, a, now) : null
-    const rows = showStatus && data ? drawChips($, e, data, now, e.props.bodyColumns, accent) : null
-
-    return (
-      <Box flexDirection="column">
-        {popup}
-        {rows}
-        {below}
-      </Box>
-    )
-  })
-
-  // ── under the prompt (fullscreen): the grid, then the engine's hint line ──
-  on('ui.render', { component: 'PromptHint' }, async ($, e, next) => {
-    const below = await next(e)
-    if (!isUnderPrompt(e)) return below
-    const [isOn, data, now, accent] = await statusInputs($)
-    if (!isOn || data === null) return below
-    const { Box } = $.ui.resolve(e)
-    // Leave the right of the footer to the mode labels and the drawer.
-    const total = Math.max(60, Math.min(150, (e.viewport?.columns ?? 120) - 34))
-    return (
-      <Box flexDirection="column">
-        {drawChips($, e, data, now, total, accent)}
-        {below}
-      </Box>
-    )
-  })
-
-  // ── footer: the mods that draw here (those without a drawer page), then "◆ AshPack" ──
+  // ── footer: the mods that draw here (those without a page), then "◆ AshPack" ──
   on('ui.render', { component: 'SessionMode' }, async ($, e, next) => {
     const below = await next(e)
-    const isOpen = await read($, drawerOpen)
+    const [isOpen, accent] = await Promise.all([read($, drawerOpen), accentColor($)])
     const { Box, Button, Text } = $.ui.resolve(e)
     return (
       <Box columnGap={2}>
         {below}
         <Box>
-          <Text color={ACCENT}>◆ </Text>
+          <Text color={accent}>◆ </Text>
           <Button key="ashpack" plain label={isOpen ? 'AshPack ◂' : 'AshPack ▸'} onPress={() => (isOpen ? closeDrawer($) : openDrawer($))} />
         </Box>
       </Box>
     )
   })
 
-  // The person closing the panel (Esc, its close mark) folds the drawer too.
-  on('ui.close', async ($, e, next) => {
-    if (e.id === DRAWER) await update($, drawerOpen, () => false)
-    return next(e)
-  }).catch(($, e, next) => next(e))
-
-  on('command.run', { command: 'ashpack' }, async ($, e) => {
-    const arg = e.args.trim().toLowerCase()
-    if (arg === 'compact' || arg === 'status') {
-      const isOn = await toggle($, arg === 'compact' ? 'compact' : 'statusOn')
-      return { text: `${arg === 'compact' ? 'Compact mode' : 'Status rows'} ${isOn ? 'on' : 'off'}.` }
-    }
-    // Any other word names a page (`/ashpack skins`); a page no mod draws shows Home.
-    await openDrawer($, arg || undefined)
-    return {}
+  // ── the strip above the prompt: the chips of the mods beneath, in one row ──
+  on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => {
+    const below = await next(e)
+    const chips = findChips(below)
+    if (chips.length === 0) return below
+    const { Box } = $.ui.resolve(e)
+    const isTerminal = e.surface === 'terminal'
+    return (
+      <Box flexDirection="column">
+        <Box flexWrap="wrap" columnGap={isTerminal ? 2 : 3} rowGap={isTerminal ? 0 : 1}>
+          {chips.map(c => c.tree as RenderElement)}
+        </Box>
+        {withoutChips(below) as RenderElement | null}
+      </Box>
+    )
   })
 
   // ── the drawer: a header, the tab bar, the shown page ──
@@ -622,34 +223,23 @@ export const register: Register = on => {
     // A mod whose page hook fails costs the pages, never the drawer.
     const below = await next(e).catch(err => ($.ui.log(`ashpack drawer pages: ${String(err)}`, { to: 'debug' }), null))
     const pages = findPages(below)
-    const [shown, isCompactOn, isStatusOn, mods, busy] = await Promise.all([
-      read($, page),
-      read($, compact),
-      read($, statusOn),
-      read($, pack),
-      read($, packBusy),
-    ])
+    const [shown, misplacedNow, accent] = await Promise.all([read($, page), read($, isMisplaced), accentColor($)])
     const { Box, Text } = $.ui.resolve(e)
-    const tabs = [{ id: 'home', label: 'Home' }, ...pages, { id: 'mods', label: 'Mods' }]
+    const tabs = [{ id: 'home', label: 'Home' }, ...pages]
     const active = tabs.find(t => t.id === shown)?.id ?? 'home'
-    const body =
-      active === 'home'
-        ? homePage($, e, isCompactOn, isStatusOn, pages)
-        : active === 'mods'
-          ? modsPage($, e, mods, busy)
-          : ((pages.find(p => p.id === active)?.tree ?? null) as RenderElement | null)
+    const body = active === 'home' ? homePage($, e, pages, misplacedNow, accent) : ((pages.find(p => p.id === active)?.tree ?? null) as RenderElement | null)
     return (
       <Box flexDirection="column" rowGap={1} paddingX={1}>
         <Box justifyContent="space-between" columnGap={2}>
           <Text wrap="truncate-end">
-            <Text bold color={ACCENT}>
+            <Text bold color={accent}>
               ◆ AshPack
             </Text>
             <Text dimColor> · your mods, one place</Text>
           </Text>
           {e.surface === 'terminal' ? <Text dimColor>Esc closes</Text> : null}
         </Box>
-        {tabBar($, e, tabs, active)}
+        {tabBar($, e, tabs, active, accent)}
         {body}
       </Box>
     )

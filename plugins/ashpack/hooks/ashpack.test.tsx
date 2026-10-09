@@ -1,38 +1,13 @@
 import { expect, mock, test } from 'claude-code/testing'
 
-import {
-  addTask,
-  around,
-  bar,
-  barSpans,
-  barSvg,
-  COLORS,
-  effortLabel,
-  findPages,
-  isBar,
-  levelColor,
-  parseGit,
-  packMods,
-  planFromTodos,
-  popupWidth,
-  prettyModel,
-  segments,
-  statusChips,
-  updateTask,
-  wave,
-  waveSvg,
-  windowLabel,
-} from './format'
+import { findChips, findPages, misplaced, stepTab, withHostFirst, withoutChips } from './format'
 
 const SURFACES = ['terminal', 'desktop'] as const
 const FULL = { columns: 160, rows: 50, isFullscreen: true } as never
-const MAIN = { columns: 160, rows: 50, isFullscreen: false } as never
 
 // A drawn tree's text, children joined in order.
 const flatten = (node: unknown): string =>
-  typeof node === 'string'
-    ? node
-    : ((node as { children?: unknown[] })?.children ?? []).map(flatten).join('')
+  typeof node === 'string' ? node : ((node as { children?: unknown[] })?.children ?? []).map(flatten).join('')
 const DRAWER = { component: 'Pane', requestId: 'ashpack' } as const
 const PANE_PROPS = {
   title: 'AshPack',
@@ -40,172 +15,45 @@ const PANE_PROPS = {
   bodyColumns: 60,
   placement: 'inline',
   scroll: { offset: 0, bodyRows: 12, contentRows: 12 },
-  view: {},
 } as never
+const BAND_PROPS = { hasSurvey: false, isWorking: false, maxRows: 10, bodyColumns: 140, scroll: { offset: 0, bodyRows: 10, contentRows: 0 }, view: {} } as never
 
-test('helpers: names, bars, colors, git, tabs, loader', () => {
-  expect(prettyModel('claude-opus-5-5[1m]')).toBe('Opus 5.5 1M')
-  expect(prettyModel('claude-fable-5-1')).toBe('Fable 5.1')
-  expect(windowLabel('five_hour')).toBe('session')
-  expect(windowLabel('seven_day')).toBe('week')
-  expect(windowLabel('seven_day_fable')).toBe('fable')
-  expect(effortLabel('high')).toBe('◕ high')
-
-  expect(bar(42, 8)).toEqual(['▰▰▰', '▱▱▱▱▱'])
-  expect(bar(150, 4)).toEqual(['▰▰▰▰', ''])
-  expect(levelColor(10)).toBe(COLORS.ok)
-  expect(levelColor(60)).toBe(COLORS.warn)
-  expect(levelColor(90)).toBe(COLORS.hot)
-
-  const git = parseGit('# branch.oid abc\n# branch.head main\n# branch.upstream origin/main\n# branch.ab +1 -2\n1 .M N... a\n? new.txt\n')
-  expect(git).toEqual({ branch: 'main', dirty: 2, ahead: 1, behind: 2 })
-  expect(parseGit('')).toBeNull()
-
-  const now = Date.parse('2026-10-08T10:00:00Z')
-  const chips = statusChips(
-    {
-      model: 'claude-opus-5-5[1m]',
-      effort: 'high',
-      contextPercent: 42,
-      rateLimits: [
-        { kind: 'five_hour', percentUsed: 23, resetsAt: '2026-10-08T12:14:00Z' },
-        { kind: 'seven_day', percentUsed: 41, resetsAt: '2026-10-11T14:00:00Z' },
-        { kind: 'seven_day_fable', percentUsed: 12, resetsAt: '2026-10-11T14:00:00Z' },
-      ],
-      git: { branch: 'main', dirty: 0, ahead: 0, behind: 0 },
-      folder: 'ashpack',
-      costUsd: 1.24,
-      startedAt: Date.parse('2026-10-08T09:37:00Z'),
-    },
-    now,
-    4,
-    '#fab387',
-  )
-  const textOf = (cell: (typeof chips)[number]) => cell.flatMap(sp => (isBar(sp) ? barSpans(sp) : [sp])).map(sp => sp.text).join('')
-  expect(chips.map(textOf)).toEqual([
-    '◆ Opus 5.5 1M · ◕ high',
-    '⎇ main',
-    'ctx ▰▰▱▱ 42%',
-    'session ▰▱▱▱ 23% ↻2h14m',
-    'week ▰▰▱▱ 41%  fable ▱▱▱▱ 12% ↻3d4h',
-    'ashpack · $1.24 · 23m',
-  ])
-  const model = chips[0]?.[0]
-  expect(model && !isBar(model) ? model.color : undefined).toBe('#fab387') // the model wears the skin's accent
-  // The desktop's bar: one image, lit segments solid and the rest faint.
-  expect(barSvg(42, 4)).toMatch(/^<svg .*opacity="1".*opacity="0.25".*<\/svg>$/)
-  expect((barSvg(42, 4).match(/<rect/g) ?? []).length).toBe(4)
-
-  // Sections: the phases with no task list, else the list itself.
-  // No task list: the latest finished steps, then the running one.
-  expect(segments([], 'Thinking', []).map(s => `${s.title}:${s.state}`)).toEqual(['Thinking:now'])
-  expect(segments([], 'Running ls', ['a', 'b', 'c', 'd']).map(s => `${s.title}:${s.state}`)).toEqual([
-    'b:done',
-    'c:done',
-    'd:done',
-    'Running ls:now',
-  ])
-  const todos = planFromTodos([
-    { content: 'Read', status: 'completed' },
-    { content: 'Fix', status: 'in_progress' },
-    { content: 'Test', status: 'pending' },
-  ])
-  expect(segments(todos, 'Think', []).map(s => `${s.title}:${s.state}`)).toEqual(['Read:done', 'Fix:now', 'Test:todo'])
-  const tasks = updateTask(addTask(addTask([], '1', 'One'), '2', 'Two'), { taskId: '1', status: 'completed' })
-  expect(segments(tasks, 'Think', []).map(s => s.state)).toEqual(['done', 'now'])
-  expect(updateTask(tasks, { taskId: '2', status: 'deleted' }).map(s => s.id)).toEqual(['1'])
-
-  const pack = packMods(
-    JSON.stringify({ plugins: [{ name: 'ashpack' }, { name: 'hello' }, { name: 'later' }] }),
-    JSON.stringify({ plugins: { 'ashpack@ashpack': [{}], 'hello@ashpack': [{}], 'baton@baton-mods': [{}] } }),
-    { 'ashpack@ashpack': true, 'hello@ashpack': false },
-    'ashpack',
-  )
-  expect(pack.map(m => `${m.name}:${m.state}`)).toEqual(['ashpack:on', 'hello:off', 'later:missing'])
-
-  // The drawer's pages: Boxes keyed `ashpack-page:<Label>` anywhere in the tree, one per id.
+test('helpers: pages, chips, plugin order, tabs', () => {
   const page = (label: string, text: string) => ({ type: 'Box', props: { key: `ashpack-page:${label}` }, children: [text] })
-  const tree = { type: 'Box', props: {}, children: [{ type: 'Box', props: {}, children: [page('Baton', 'b')] }, page('Skins', 's'), page('skins', 'dup'), page('Mods', 'x')] }
+  const tree = { type: 'Box', props: {}, children: [{ type: 'Box', props: {}, children: [page('Baton', 'b')] }, page('Skins', 's'), page('skins', 'dup'), page('Home', 'x')] }
   expect(findPages(tree).map(p => `${p.id}:${p.label}:${flatten(p.tree)}`)).toEqual(['baton:Baton:b', 'skins:Skins:s'])
   expect(findPages('engine text')).toEqual([])
 
-  // The wave: one bar per cell, moving right a step per frame.
-  expect(wave(0, 4)).toBe('▅▇█▇')
-  expect(wave(1, 4)).toBe('▃▆██')
-  expect(wave(0, 8)).toMatch(/^[▁▂▃▄▅▆▇█]{8}$/)
-  // The desktop's loader is one fixed SVG that animates itself, each bar a beat behind.
-  expect(waveSvg('#2f7bf0', 120)).toBe(waveSvg('#2f7bf0', 120))
-  expect(waveSvg('#2f7bf0', 120)).toMatch(/^<svg .*width="116".*<animate attributeName="height" .*begin="-0.1s".*<\/svg>$/)
+  // Chips: lifted out of the band tree, which keeps the rest.
+  const chip = (label: string) => ({ type: 'Box', props: { key: `ashpack-chip:${label}` }, children: [label] })
+  const band = { type: 'Box', props: {}, children: [{ type: 'Box', props: {}, children: [chip('ctx'), chip('week')] }, { type: 'Text', props: {}, children: ['other'] }] }
+  expect(findChips(band).map(c => c.label)).toEqual(['ctx', 'week'])
+  expect(flatten(withoutChips(band))).toBe('other')
+  expect(findChips(withoutChips(band))).toEqual([])
 
-  // The popup: half the band, never under 48 columns; at most n rows, the running one in view.
-  expect(popupWidth(160)).toBe(80)
-  expect(popupWidth(70)).toBe(48)
-  expect(popupWidth(40)).toBe(40)
-  const many = planFromTodos(['a', 'b', 'c', 'd', 'e', 'f', 'g'].map((content, i) => ({ content, status: i < 5 ? 'completed' : 'pending' })))
-  expect(around(segments(many, 'x', []), 3).map(s => s.title)).toEqual(['e', 'f', 'g'])
-  expect(around(segments(many.map(s => ({ ...s, status: 'completed' as const })), 'x', []), 3).map(s => s.title)).toEqual(['e', 'f', 'g'])
-  expect(around(segments([], 'x', []), 3).map(s => s.title)).toEqual(['x'])
+  // Order: the host must be first; the fix moves it there and keeps the rest.
+  expect(misplaced({ 'ashpack@ashpack': true, 'baton@baton-mods': true })).toBe(false)
+  expect(misplaced({ 'baton@baton-mods': true, 'ashpack@ashpack': true })).toBe(true)
+  expect(misplaced({ 'baton@baton-mods': true })).toBe(false)
+  const fixed = JSON.parse(withHostFirst(JSON.stringify({ theme: 'dark', enabledPlugins: { 'baton@baton-mods': true, 'ashpack@ashpack': true, 'x@y': false } })))
+  expect(Object.keys(fixed.enabledPlugins)).toEqual(['ashpack@ashpack', 'baton@baton-mods', 'x@y'])
+  expect(fixed.theme).toBe('dark')
+  expect(withHostFirst('{"enabledPlugins":{"x@y":true}}')).toBe('{"enabledPlugins":{"x@y":true}}')
+
+  expect(stepTab(['home', 'skins', 'baton'], 'baton', 1)).toBe('home')
+  expect(stepTab(['home', 'skins', 'baton'], 'home', -1)).toBe('baton')
 })
 
-test('the drawer\'s Home page toggles compact mode and status rows; compact mode hides tool rows', async ($, on) => {
+test('the footer opens the drawer: a side pane with Home and a page per mod; the page shown is kept', async ($, on) => {
   mock.store(on)
-  on('ui.render', { component: 'ToolUse' }, ($, e) => {
-    const { Text } = $.ui.resolve(e)
-    return <Text>engine-row</Text>
-  })
-  // Stands in for the engine's own drawing under the drawer pane.
-  on('ui.render', DRAWER, ($, e) => {
-    const { Box } = $.ui.resolve(e)
-    return <Box />
-  })
-  for (const surface of SURFACES) {
-    const panel = await $.ui.mount({ plugin: 'ashpack', surface, ...DRAWER, props: PANE_PROPS })
-    expect((await panel.find({ key: 'compact' }))?.text).toContain('OFF')
-    expect((await panel.find({ key: 'status' }))?.text).toContain('ON')
-    await panel.press({ key: 'compact' })
-    expect((await panel.find({ key: 'compact' }))?.text).toContain('ON')
-
-    const row = await $.ui.mount({
-      plugin: 'ashpack',
-      surface,
-      component: 'ToolUse',
-      props: { tool_use_id: 't1', tool: 'Bash', input: { command: 'ls' }, isRunning: false, isErrored: false, isInterrupted: false },
-    })
-    // Compact mode leaves the row out: dropped on the terminal, an empty row on the desktop.
-    const hidden = JSON.stringify(await row.drawn())
-    expect(hidden).not.toContain('engine-row')
-    if (surface === 'terminal') expect(hidden).toContain('"display":"none"')
-    else expect(hidden).not.toContain('display')
-
-    await panel.press({ key: 'compact' })
-    await panel.press({ key: 'status' })
-    expect((await panel.find({ key: 'status' }))?.text).toContain('OFF')
-    await panel.press({ key: 'status' })
-    await row.unmount()
-    await panel.unmount()
-  }
-})
-
-test('the footer opens the drawer: a side pane with a page per mod that draws one, and Mods', async ($, on) => {
-  mock.store(on)
-  mock.clock(on, { now: Date.parse('2026-10-08T10:00:00Z') })
-  mock.env(on, { HOME: '/nowhere' })
+  on('settings.read', () => ({ value: { enabledPlugins: { 'ashpack@ashpack': true, 'ashpack-status@ashpack': true } } }))
   const opened: string[] = []
   on('ui.open', ($, e) => (opened.push(e.id), { value: { isPlaced: true } }))
   on('ui.close', () => ({ value: undefined }))
   on('ui.log', () => ({ value: undefined }))
+  on('command.register', () => ({ value: undefined }) as never)
+  on('session.start', ($, e) => e as never)
   on('ui.toast', () => ({ value: undefined }))
-  const files: Record<string, string> = {
-    '/nowhere/.claude/plugins/known_marketplaces.json': JSON.stringify({ ashpack: { installLocation: '/pack' } }),
-    '/nowhere/.claude/plugins/installed_plugins.json': JSON.stringify({ plugins: { 'ashpack@ashpack': [{}], 'hello@ashpack': [{}] } }),
-    '/pack/.claude-plugin/marketplace.json': JSON.stringify({ plugins: [{ name: 'ashpack' }, { name: 'hello' }] }),
-  }
-  on('fs.read', ($, e) => ({ value: files[e.path] ?? '' }))
-  on('settings.read', () => ({ value: { enabledPlugins: { 'ashpack@ashpack': true, 'hello@ashpack': false } } }))
-  const ran: string[] = []
-  on('process.run', ($, e) => (ran.push(e.argv.join(' ')), { value: { exitCode: 0, stdout: '', stderr: '' } }) as never)
-  const filled: string[] = []
-  on('prompt.fill', ($, e) => (filled.push(e.text), { isFilled: true }) as never)
   // Stands in for a mod with no drawer page: it keeps its footer badge.
   on('ui.render', { component: 'SessionMode' }, ($, e) => {
     const { Text } = $.ui.resolve(e)
@@ -223,188 +71,97 @@ test('the footer opens the drawer: a side pane with a page per mod that draws on
       </Box>
     )
   })
+  await $.session.start({ source: 'startup', cwd: '/repo' } as never)
   for (const surface of SURFACES) {
     const footer = await $.ui.mount({ plugin: 'ashpack', surface, component: 'SessionMode', viewport: FULL, props: { modes: ['focus'] } })
     expect(await footer.find({ text: /old-badge/ })).toBeDefined()
     expect((await footer.find({ key: 'ashpack' }))?.text).toContain('▸')
-    // Every surface opens the same side pane; nothing floats over the footer.
     await footer.press({ key: 'ashpack' })
     expect(opened).toEqual(['ashpack'])
     expect((await footer.find({ key: 'ashpack' }))?.text).toContain('◂')
-    expect(JSON.stringify(await footer.drawn())).not.toContain('"position":"absolute"')
 
     const pane = await $.ui.mount({ plugin: 'ashpack', surface, ...DRAWER, props: PANE_PROPS })
-    for (const id of ['home', 'baton', 'mods']) expect(await pane.find({ key: `page-${id}` })).toBeDefined()
-    expect(await pane.find({ key: 'compact' })).toBeDefined()
+    for (const id of ['home', 'baton']) expect(await pane.find({ key: `page-${id}` })).toBeDefined()
+    expect(await pane.find({ key: 'page-mods' })).toBeUndefined() // no installer page
     expect(await pane.find({ key: 'baton-ping' })).toBeUndefined()
-
-    // The mod's page, drawn by it; its button runs its own handler.
+    expect((await pane.find({ key: 'home-open-baton' }))?.text).toContain('Baton') // Home lists the pages
     await pane.press({ key: 'page-baton' })
-    expect(await pane.find({ key: 'compact' })).toBeUndefined()
+    expect(await pane.find({ key: 'baton-ping' })).toBeDefined()
     await pane.press({ key: 'baton-ping', plugin: 'test' })
-    expect(pressed).toBeGreaterThan(0)
-
-    // Mods: the pack's mods; a press turns one on and hands over /reload-plugins.
-    await pane.press({ key: 'page-mods' })
-    expect(await pane.find({ text: /this pack/ })).toBeDefined()
-    expect((await pane.find({ key: 'mod-hello' }))?.text).toContain('turn on')
-    await pane.press({ key: 'mod-hello' })
-    expect(ran.at(-1)).toBe('claude plugin enable hello@ashpack')
-    expect(filled.at(-1)).toBe('/reload-plugins')
-    await pane.press({ key: 'mods-update' })
-    expect(ran.slice(-3)).toEqual(['claude plugin marketplace update ashpack', 'claude plugin update ashpack@ashpack', 'claude plugin update hello@ashpack'])
+    expect(pressed).toBe(1)
+    if (surface === 'terminal') {
+      await pane.press({ key: 'tab-next' })
+      expect(await pane.find({ key: 'baton-ping' })).toBeUndefined() // wrapped round to Home
+    }
     await pane.press({ key: 'page-home' })
-    await pane.unmount()
-
+    expect(await pane.find({ key: 'baton-ping' })).toBeUndefined()
+    // The footer button folds the drawer again.
     await footer.press({ key: 'ashpack' })
     expect((await footer.find({ key: 'ashpack' }))?.text).toContain('▸')
+    await pane.unmount()
     await footer.unmount()
     opened.length = 0
+    pressed = 0
   }
-  // `/ashpack <page>` opens the drawer on that page.
-  await $.command.run({ command: 'ashpack', args: 'Baton' } as never)
-  const pane = await $.ui.mount({ plugin: 'ashpack', surface: 'terminal', ...DRAWER, props: PANE_PROPS })
-  expect(await pane.find({ key: 'baton-ping' })).toBeDefined()
-  await pane.unmount()
 })
 
-test('the status chips draw model, branch, context and usage above the prompt', async ($, on) => {
+test('the strip lifts the chips of the mods beneath into one row', async ($, on) => {
   mock.store(on)
-  const clock = mock.clock(on, { now: Date.parse('2026-10-08T10:00:00Z') })
-  on('settings.read', () => ({ value: { effortLevel: 'high', permissions: { defaultMode: 'auto' } } }))
-  on('command.register', () => ({ value: undefined }) as never)
-  on('ui.status', () => ({ value: undefined }))
+  on('settings.read', () => ({ value: { enabledPlugins: { 'ashpack@ashpack': true } } }))
   on('ui.toast', () => ({ value: undefined }))
-  on('ui.log', () => ({ value: undefined }))
-  on('session.start', ($, e) => e as never)
-  on('session.model', () => ({ value: 'claude-opus-5-5[1m]' }))
-  on('session.cwd', () => ({ value: '/Users/ashish/Documents/Code/Mods/ashpack' }))
-  on('session.usage', () => ({
-    value: {
-      startedAt: Date.parse('2026-10-08T09:37:00Z'),
-      context: { window: 1_000_000, tokens: 420_000, percent: 42 },
-      rateLimits: [
-        { kind: 'five_hour', percentUsed: 23, resetsAt: '2026-10-08T12:14:00Z' },
-        { kind: 'seven_day_fable', percentUsed: 91, resetsAt: '2026-10-11T14:00:00Z' },
-      ],
-      cost: { usd: 1.24 },
-    },
-  }))
-  on('process.run', () => ({ value: { exitCode: 0, stdout: '# branch.head main\n# branch.ab +1 -0\n1 .M x\n', stderr: '' } }) as never)
-
+  // Stands in for two mods, each with a chip in its band tree, one with a row of its own too.
   on('ui.render', { component: 'AbovePrompt' }, ($, e) => {
-    const { Box } = $.ui.resolve(e)
-    return <Box />
+    const { Box, Text } = $.ui.resolve(e)
+    return (
+      <Box flexDirection="column">
+        <Box key="ashpack-chip:ctx">
+          <Text>ctx 42%</Text>
+        </Box>
+        <Text>a row of its own</Text>
+        <Box key="ashpack-chip:baton">
+          <Text>baton · 2</Text>
+        </Box>
+      </Box>
+    )
   })
-  on('ui.render', { component: 'PromptHint' }, ($, e) => {
-    const { Text } = $.ui.resolve(e)
-    return <Text dimColor>{e.props.hint}</Text>
-  })
-
-  await $.session.start({ source: 'startup', cwd: '/Users/ashish/Documents/Code/Mods/ashpack' } as never)
-  await clock.advance(0) // refreshStatus runs unawaited
   for (const surface of SURFACES) {
-    const band = await $.ui.mount({
-      plugin: 'ashpack',
-      surface,
-      component: 'AbovePrompt',
-      viewport: MAIN,
-      props: { hasSurvey: false, isWorking: false, maxRows: 10, bodyColumns: 140, scroll: { offset: 0, bodyRows: 10, contentRows: 0 }, view: {} } as never,
-    })
-    // The chips in the band: outlined pills on the desktop, a spaced row on the terminal.
-    const text = flatten(await band.drawn())
-    for (const part of ['⎇ main', '●1', '↑1', 'ashpack', '$1.24', 'ctx', '42%', 'session', '23%', '↻2h14m', 'fable', '91%']) {
-      expect(text).toContain(part)
-    }
-    // The desktop app names the model and effort in its own footer: no model chip there.
-    if (surface === 'terminal') expect(text).toContain('Opus 5.5 1M · ◕ high')
-    else expect(text).not.toContain('Opus')
-    // The desktop draws the bars as images; the terminal as text.
-    const hasSvg = JSON.stringify(await band.drawn()).includes('"type":"Svg"')
-    expect(hasSvg).toBe(surface !== 'terminal')
-    if (surface === 'terminal') expect(text).toContain('▰')
+    const band = await $.ui.mount({ plugin: 'ashpack', surface, component: 'AbovePrompt', viewport: FULL, props: BAND_PROPS })
+    const tree = await band.drawn()
+    const text = flatten(tree)
+    expect(text).toContain('ctx 42%')
+    expect(text).toContain('baton · 2')
+    expect(text).toContain('a row of its own')
+    // Each chip once, in the strip (the first row), the rest beneath.
+    expect(text.split('ctx 42%').length).toBe(2)
+    expect(text.indexOf('baton · 2')).toBeLessThan(text.indexOf('a row of its own'))
+    expect(JSON.stringify(tree)).toContain('"flexWrap":"wrap"')
     await band.unmount()
-
-    // The fullscreen terminal: the grid sits under the prompt, above the engine's hint line.
-    // The desktop reports fullscreen too, but draws nothing of a mod's under its prompt: the grid stays above.
-    const hint = await $.ui.mount({
-      plugin: 'ashpack',
-      surface,
-      component: 'PromptHint',
-      viewport: FULL,
-      props: { isDraft: false, isWorking: false, hint: '⏵⏵ auto mode on' },
-    })
-    const hintText = flatten(await hint.drawn())
-    if (surface === 'terminal') {
-      expect(hintText).toContain('◆ Opus 5.5 1M')
-      expect(hintText.indexOf('ctx')).toBeLessThan(hintText.indexOf('auto mode on'))
-    } else expect(hintText).not.toContain('Opus')
-    await hint.unmount()
-
-    const fullBand = await $.ui.mount({
-      plugin: 'ashpack',
-      surface,
-      component: 'AbovePrompt',
-      viewport: FULL,
-      props: { hasSurvey: false, isWorking: false, maxRows: 10, bodyColumns: 140, scroll: { offset: 0, bodyRows: 10, contentRows: 0 }, view: {} } as never,
-    })
-    if (surface === 'terminal') expect(flatten(await fullBand.drawn())).not.toContain('ctx')
-    else expect(flatten(await fullBand.drawn())).toContain('ctx')
-    await fullBand.unmount()
   }
 })
 
-test('compact mode: a half-width popup lists the turn\'s sections as rows, the running one with a loader', async ($, on) => {
+test('Home says when another mod sits above the host, and moves the host first', async ($, on) => {
   mock.store(on)
-  // Stands in for the Skins mod, which shares the active skin's accent.
-  on('state.get', ($, e, next) => {
-    const { plugin, key } = e as { plugin: string; key: string } // another plugin's value: not in AshPack's contract
-    return plugin === 'ashpack-skins' && key === 'accent' ? ({ value: { value: '#fab387', version: 1 } } as never) : next(e)
-  })
-  // Stands in for the engine's own drawing under the drawer pane.
+  mock.env(on, { HOME: '/nowhere' })
+  const user = { enabledPlugins: { 'baton@baton-mods': true, 'ashpack@ashpack': true, 'ashpack-status@ashpack': true } }
+  on('settings.read', () => ({ value: user }))
+  let written = ''
+  on('fs.read', () => ({ value: JSON.stringify(user) }))
+  on('fs.write', ($, e) => ((written = e.text), { value: undefined }))
+  const toasts: string[] = []
+  on('ui.toast', ($, e) => (toasts.push(e.text), { value: undefined }))
+  on('prompt.fill', () => ({ isFilled: true }) as never)
+  on('command.register', () => ({ value: undefined }) as never)
+  on('session.start', ($, e) => e as never)
   on('ui.render', DRAWER, ($, e) => {
     const { Box } = $.ui.resolve(e)
     return <Box />
   })
-  mock.clock(on, { now: Date.parse('2026-10-08T10:00:00Z') })
-  on('ui.render', { component: 'AbovePrompt' }, ($, e) => {
-    const { Box } = $.ui.resolve(e)
-    return <Box />
-  })
-  on('tool.call', () => ({ result: {} }) as never)
-  on('turn.start', ($, e) => e as never)
-  const footer = await $.ui.mount({ plugin: 'ashpack', surface: 'terminal', ...DRAWER, props: PANE_PROPS })
-  await footer.press({ key: 'compact' })
-  await $.turn.start({ prompt: 'go', turnId: 't1' } as never)
-  const bandProps = { hasSurvey: false, isWorking: true, maxRows: 10, bodyColumns: 120, scroll: { offset: 0, bodyRows: 10, contentRows: 0 }, view: {} } as never
-  // No task list: the finished step, then the running one with the loader beside it.
-  await $.tool.call({ tool: 'Skill', skill: 'verify' } as never)
-  for (const surface of SURFACES) {
-    const trail = await $.ui.mount({ plugin: 'ashpack', surface, component: 'AbovePrompt', viewport: FULL, props: bandProps })
-    const drawn = JSON.stringify(await trail.drawn())
-    const text = flatten(await trail.drawn())
-    expect(drawn).toContain('"width":60') // half of 120
-    expect(text).not.toContain('ctx') // the popup takes the chips' place while Claude works
-    expect(text).toContain('✓ Running /verify')
-    expect(text).toContain('▸ Thinking…')
-    // The terminal draws the loader as text per frame; the desktop as an SVG that animates itself.
-    if (surface === 'terminal') expect(text).toMatch(/[▁▂▃▄▅▆▇█]{3}/)
-    else expect(drawn).toContain('<animate ')
-    expect(drawn).toContain('#fab387') // the loader wears the skin
-    await trail.unmount()
-  }
-
-  await $.tool.call({ tool: 'TodoWrite', todos: [
-    { content: 'Read the code', status: 'completed', activeForm: 'Reading' },
-    { content: 'Fix the card', status: 'in_progress', activeForm: 'Fixing' },
-    { content: 'Run tests', status: 'pending', activeForm: 'Testing' },
-  ] } as never)
-  const band = await $.ui.mount({ plugin: 'ashpack', surface: 'terminal', component: 'AbovePrompt', viewport: FULL, props: bandProps })
-  const text = flatten(await band.drawn())
-  for (const part of ['◆ AshPack', '✓ Read the code', '▸ Fix the card', '○ Run tests', '1/3']) expect(text).toContain(part)
-  // One row per section: the order reads top to bottom.
-  expect(text.indexOf('Read the code')).toBeLessThan(text.indexOf('Fix the card'))
-  expect(text.indexOf('Fix the card')).toBeLessThan(text.indexOf('Run tests'))
-  await band.unmount()
-  await footer.unmount()
+  await $.session.start({ source: 'startup', cwd: '/repo' } as never)
+  const pane = await $.ui.mount({ plugin: 'ashpack', surface: 'terminal', ...DRAWER, props: PANE_PROPS })
+  expect(flatten(await pane.drawn())).toContain('Another mod sits above AshPack')
+  await pane.press({ key: 'fix-order' })
+  expect(Object.keys(JSON.parse(written).enabledPlugins)[0]).toBe('ashpack@ashpack')
+  expect(toasts.join(' ')).toContain('first in enabledPlugins')
+  expect(flatten(await pane.drawn())).not.toContain('Another mod sits above AshPack')
+  await pane.unmount()
 })

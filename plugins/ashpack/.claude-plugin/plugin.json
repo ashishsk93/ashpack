@@ -1,7 +1,7 @@
 {
   "name": "ashpack",
-  "version": "0.9.3",
-  "description": "AshPack: status chips, compact mode with a working popup, and a side-panel drawer where each mod has its own page.",
+  "version": "0.9.5",
+  "description": "AshPack: one drawer with a page per mod and one strip with a chip per mod, so your mods stop fighting for the footer and the band. Host for ashpack-status, ashpack-skins and others.",
   "author": {
     "name": "Ashish S Kumar"
   },

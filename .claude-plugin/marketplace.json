@@ -8,7 +8,12 @@
     {
       "name": "ashpack",
       "source": "./plugins/ashpack",
-      "description": "Status line, compact mode, and the AshPack drawer: a side panel with a page per mod."
+      "description": "The host: one drawer with a page per mod, one strip with a chip per mod."
+    },
+    {
+      "name": "ashpack-status",
+      "source": "./plugins/ashpack-status",
+      "description": "Status chips by the prompt and compact mode with a working popup. A page of the AshPack drawer."
     },
     {
       "name": "ashpack-skins",
