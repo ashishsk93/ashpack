@@ -6,6 +6,7 @@
   <a href="https://github.com/ashishsk93/ashpack/releases"><img alt="release" src="https://img.shields.io/github/v/release/ashishsk93/ashpack?label=release&color=8b5cf6"></a>
   <img alt="Claude Code mods" src="https://img.shields.io/badge/Claude_Code-mods-1a9450">
   <img alt="terminal and desktop app" src="https://img.shields.io/badge/surfaces-terminal_%C2%B7_desktop_app-2f7bf0">
+  <a href="LICENSE"><img alt="MIT" src="https://img.shields.io/badge/license-MIT-a87700"></a>
 </p>
 
 <p align="center"><img src="docs/hero.svg" alt="AshPack: the status strip, the working popup, and the drawer with a tab per mod" width="880"></p>
@@ -90,3 +91,7 @@ scripts/check.sh [name]                                     # validate, test and
 From a clone: `claude plugin marketplace add /path/to/ashpack`, then `claude plugin install ashpack@ashpack`. Edits apply after `/reload-plugins`.
 
 Mods run in a sandbox with no DOM and no Node. Code that uses `$` must be in the same file as the hook that uses it; pure helpers can live in other files. The type check uses the API types that Claude Code writes; if `check.sh` finds none, set `CLAUDE_CODE_TYPES` to the path of `claude-code.d.ts`.
+
+## License
+
+[MIT](LICENSE).

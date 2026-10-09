@@ -281,7 +281,8 @@ function cardTree($: EngineInterface, e: DrawInput, c: Card, copy: string, key: 
   const { Box, Button, Svg } = $.ui.resolve(e)
   return (
     <Box key={`card-${key}`} flexDirection="column" marginY={1} alignSelf="flex-start">
-      <Svg source={c.source} alt={c.alt} width={c.width} height={c.height} />
+      {/* Keyed, so a redraw of the transcript keeps the same image instead of rebuilding it. */}
+      <Svg key={`svg-${key}`} source={c.source} alt={c.alt} width={c.width} height={c.height} />
       <Box justifyContent="flex-end">
         <Button key={`copy-${key}`} plain dimColor label="Copy" onPress={() => copyText($, e, copy)} />
       </Box>
