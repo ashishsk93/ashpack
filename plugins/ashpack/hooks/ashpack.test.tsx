@@ -5,7 +5,6 @@ import {
   around,
   bar,
   COLORS,
-  effortLabel,
   findPages,
   gridWidths,
   levelColor,
@@ -47,7 +46,6 @@ test('helpers: names, bars, colors, git, tabs, loader', () => {
   expect(windowLabel('five_hour')).toBe('session')
   expect(windowLabel('seven_day')).toBe('week')
   expect(windowLabel('seven_day_fable')).toBe('fable')
-  expect(effortLabel('high')).toBe('◕ high')
 
   expect(bar(42, 8)).toEqual(['━━━', '─────'])
   expect(bar(150, 4)).toEqual(['━━━━', ''])
@@ -80,11 +78,11 @@ test('helpers: names, bars, colors, git, tabs, loader', () => {
   )
   const texts = grid.map(row => row.map(cell => cell.map(sp => sp.text).join('')))
   expect(texts).toEqual([
-    ['◆ Opus 5.5 1M ◕ high', '⎇ main', 'ashpack · $1.24 · 23m'],
-    ['ctx ━━── 42%', 'session ━─── 23% ↻2h14m', 'week ━━── 41%  fable ──── 12% ↻3d4h'],
+    ['Opus 5.5 1M · high', 'main', 'ashpack · $1.24 · 23m'],
+    ['ctx ━━── 42%', 'session ━─── 23% · resets 2h14m', 'week ━━── 41%  fable ──── 12% · resets 3d4h'],
   ])
   // Each section as wide as its widest cell + separator + gap.
-  expect(gridWidths(grid, 2)).toEqual([22, 27, 39])
+  expect(gridWidths(grid, 2)).toEqual([20, 35, 47])
 
   // Sections: the phases with no task list, else the list itself.
   // No task list: the latest finished steps, then the running one.
@@ -148,10 +146,10 @@ test('the drawer\'s Home page toggles compact mode and status rows; compact mode
   })
   for (const surface of SURFACES) {
     const panel = await $.ui.mount({ plugin: 'ashpack', surface, ...DRAWER, props: PANE_PROPS })
-    expect((await panel.find({ key: 'compact' }))?.text).toContain('OFF')
-    expect((await panel.find({ key: 'status' }))?.text).toContain('ON')
+    expect((await panel.find({ key: 'compact' }))?.text).toBe('Off')
+    expect((await panel.find({ key: 'status' }))?.text).toBe('On')
     await panel.press({ key: 'compact' })
-    expect((await panel.find({ key: 'compact' }))?.text).toContain('ON')
+    expect((await panel.find({ key: 'compact' }))?.text).toBe('On')
 
     const row = await $.ui.mount({
       plugin: 'ashpack',
@@ -163,7 +161,7 @@ test('the drawer\'s Home page toggles compact mode and status rows; compact mode
 
     await panel.press({ key: 'compact' })
     await panel.press({ key: 'status' })
-    expect((await panel.find({ key: 'status' }))?.text).toContain('OFF')
+    expect((await panel.find({ key: 'status' }))?.text).toBe('Off')
     await panel.press({ key: 'status' })
     await row.unmount()
     await panel.unmount()
@@ -209,11 +207,11 @@ test('the footer opens the drawer: a side pane with a page per mod that draws on
   for (const surface of SURFACES) {
     const footer = await $.ui.mount({ plugin: 'ashpack', surface, component: 'SessionMode', viewport: FULL, props: { modes: ['focus'] } })
     expect(await footer.find({ text: /old-badge/ })).toBeDefined()
-    expect((await footer.find({ key: 'ashpack' }))?.text).toContain('▸')
+    expect((await footer.find({ key: 'ashpack' }))?.text).toBe('AshPack')
     // Every surface opens the same side pane; nothing floats over the footer.
     await footer.press({ key: 'ashpack' })
     expect(opened).toEqual(['ashpack'])
-    expect((await footer.find({ key: 'ashpack' }))?.text).toContain('◂')
+    expect((await footer.find({ key: 'ashpack' }))?.text).toBe('AshPack')
     expect(JSON.stringify(await footer.drawn())).not.toContain('"position":"absolute"')
 
     const pane = await $.ui.mount({ plugin: 'ashpack', surface, ...DRAWER, props: PANE_PROPS })
@@ -240,7 +238,7 @@ test('the footer opens the drawer: a side pane with a page per mod that draws on
     await pane.unmount()
 
     await footer.press({ key: 'ashpack' })
-    expect((await footer.find({ key: 'ashpack' }))?.text).toContain('▸')
+    expect((await footer.find({ key: 'ashpack' }))?.text).toBe('AshPack')
     await footer.unmount()
     opened.length = 0
   }
@@ -295,7 +293,7 @@ test('the status rows draw model, branch, context and usage bars above the promp
       props: { hasSurvey: false, isWorking: false, maxRows: 10, bodyColumns: 140, scroll: { offset: 0, bodyRows: 10, contentRows: 0 }, view: {} } as never,
     })
     const text = flatten(await band.drawn())
-    for (const part of ['Opus 5.5 1M', '◕ high', '⎇ main', '●1', '↑1', 'ashpack', '$1.24', 'ctx', '42%', 'session', '23%', '↻2h14m', 'fable', '91%']) {
+    for (const part of ['Opus 5.5 1M', '· high', 'main', '1 changed', '1 ahead', 'ashpack', '$1.24', 'ctx', '42%', 'session', '23%', 'resets 2h14m', 'fable', '91%']) {
       expect(text).toContain(part)
     }
     await band.unmount()
@@ -311,7 +309,7 @@ test('the status rows draw model, branch, context and usage bars above the promp
     })
     const hintText = flatten(await hint.drawn())
     if (surface === 'terminal') {
-      expect(hintText).toContain('◆ Opus 5.5 1M')
+      expect(hintText).toContain('Opus 5.5 1M · high')
       expect(hintText.indexOf('ctx')).toBeLessThan(hintText.indexOf('auto mode on'))
     } else expect(hintText).not.toContain('Opus')
     await hint.unmount()

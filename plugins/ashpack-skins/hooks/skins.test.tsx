@@ -91,7 +91,7 @@ test('the side pane shows a mock card per skin; pressing one picks it and reskin
     expect(JSON.stringify(await pane.drawn())).toContain(surface === 'terminal' ? '█▀▀' : '<svg')
 
     await pane.press({ key: 'skin-nord' })
-    expect(JSON.stringify(await pane.drawn())).toContain('✓ on')
+    expect(JSON.stringify(await pane.drawn())).toContain('in use')
 
     const row = await $.ui.mount({
       plugin: 'ashpack-skins',
@@ -105,7 +105,7 @@ test('the side pane shows a mock card per skin; pressing one picks it and reskin
 
     // The toggle turns skins off and on; the pick is kept.
     await pane.press({ key: 'skin-toggle' })
-    expect((await pane.find({ key: 'skin-toggle' }))?.text).toContain('OFF')
+    expect((await pane.find({ key: 'skin-toggle' }))?.text).toBe('Skins off')
     expect(JSON.stringify(await row.drawn())).toContain('engine-row')
     await pane.press({ key: 'skin-toggle' })
     expect(JSON.stringify(await row.drawn())).toContain(SKINS.find(s => s.id === 'nord')?.dark.blue)
@@ -118,7 +118,7 @@ test('the side pane shows a mock card per skin; pressing one picks it and reskin
       expect(JSON.stringify(await pane.drawn())).not.toMatch(/"type":"Button"[^}]*"key":"mock-/)
       await pane.press({ key: 'skin-monokai' })
     }
-    expect((await pane.find({ key: 'skin-toggle' }))?.text).toContain('ON')
+    expect((await pane.find({ key: 'skin-toggle' }))?.text).toBe('Skins on')
     expect(JSON.stringify(await row.drawn())).toContain(SKINS.find(s => s.id === 'monokai')?.dark.blue)
     await pane.press({ key: 'skin-toggle' })
     await row.unmount()
@@ -148,7 +148,7 @@ test('the picker is a page of the AshPack drawer; /skin opens it there, or its o
     expect(page).toBeDefined()
     expect(await drawer.find({ key: 'skin-dracula' })).toBeDefined()
     await drawer.press({ key: 'skin-dracula' })
-    expect(JSON.stringify(await drawer.drawn())).toContain('✓ on')
+    expect(JSON.stringify(await drawer.drawn())).toContain('in use')
     await drawer.unmount()
   }
 
@@ -161,7 +161,7 @@ test('the picker is a page of the AshPack drawer; /skin opens it there, or its o
   expect(opened).toEqual(['ashpack-skins'])
 })
 
-test('dark or light: the switch picks the palette and Claude Code\'s theme; the desktop paints rows', async ($, on) => {
+test('dark or light: the switch picks the palette and Claude Code\'s theme; rows change text colors only', async ($, on) => {
   mock.store(on)
   let theme = 'dark-ansi'
   on('config.list', () => ({ value: [{ key: 'theme', value: theme }] }) as never)
@@ -173,47 +173,106 @@ test('dark or light: the switch picks the palette and Claude Code\'s theme; the 
   await $.command.run({ command: 'skin', args: 'nord' } as never)
 
   const pane = await $.ui.mount({ plugin: 'ashpack-skins', surface: 'terminal', ...PANE, props: PANE_PROPS })
-  expect((await pane.find({ key: 'skin-mode' }))?.text).toContain('DARK')
+  expect((await pane.find({ key: 'skin-mode' }))?.text).toBe('Dark')
   await pane.press({ key: 'skin-mode' })
-  expect((await pane.find({ key: 'skin-mode' }))?.text).toContain('LIGHT')
+  expect((await pane.find({ key: 'skin-mode' }))?.text).toBe('Light')
   expect(set).toEqual(['light-ansi'])
 
   const prompt = { text: 'hello', origin: { kind: 'composer' }, isExpanded: false } as never
-  const term = await $.ui.mount({ plugin: 'ashpack-skins', surface: 'terminal', component: 'UserMessage', props: prompt })
-  const termDrawn = JSON.stringify(await term.drawn())
-  expect(termDrawn).toContain(nord.light.text)
-  expect(termDrawn).not.toContain('backgroundColor')
-  const desk = await $.ui.mount({ plugin: 'ashpack-skins', surface: 'desktop', component: 'UserMessage', props: prompt })
-  expect(JSON.stringify(await desk.drawn())).toContain(`"backgroundColor":"${nord.light.bg}"`)
-
+  for (const surface of SURFACES) {
+    const row = await $.ui.mount({ plugin: 'ashpack-skins', surface, component: 'UserMessage', props: prompt })
+    const drawn = JSON.stringify(await row.drawn())
+    expect(drawn).toContain(nord.light.accent)
+    expect(drawn).not.toContain('backgroundColor')
+    expect(drawn).not.toContain('▍')
+    await row.unmount()
+  }
   await $.command.run({ command: 'skin', args: 'dark' } as never)
   expect(set).toEqual(['light-ansi', 'dark-ansi'])
-  expect(JSON.stringify(await desk.drawn())).toContain(`"backgroundColor":"${nord.dark.bg}"`)
-  await term.unmount()
-  await desk.unmount()
   await pane.unmount()
 })
 
-test('a reply draws in the skin\'s colors: headings, lists, code; tables stay markdown', async ($, on) => {
+test('a reply draws in the skin\'s colors, with code and tables as cards', async ($, on) => {
   mock.store(on)
   on('config.list', () => ({ value: [{ key: 'theme', value: 'dark' }] }) as never)
   on('ui.render', { component: 'AssistantMessage' }, ($, e) => {
     const { Text } = $.ui.resolve(e)
     return <Text>engine-reply</Text>
   })
+  const copied: string[] = []
+  on('ui.copy', ($, e) => (copied.push(e.text), { value: { isCopied: true } }) as never)
+  on('ui.toast', () => ({ value: undefined }))
   await $.command.run({ command: 'skin', args: 'dracula' } as never)
   const p = SKINS.find(s => s.id === 'dracula')!.dark
   const text = ['## Plan', 'Use **bold** and `code`.', '- one', '- two', '```ts', 'let x = 1', '```', '| a | b |', '|---|---|', '| 1 | 2 |'].join('\n')
   for (const surface of SURFACES) {
-    const reply = await $.ui.mount({ plugin: 'ashpack-skins', surface, component: 'AssistantMessage', props: { text, isFirstOfReply: true } as never })
+    const reply = await $.ui.mount({ plugin: 'ashpack-skins', surface, component: 'AssistantMessage', props: { text, isFirstOfReply: true } as never, viewport: { columns: 120, rows: 40 } as never })
     const drawn = JSON.stringify(await reply.drawn())
-    for (const part of ['Plan', p.accent, p.text, p.cyan, 'let x = 1', '"type":"Code"', '"type":"Markdown"', '| a | b |']) expect(drawn).toContain(part)
+    for (const part of ['Plan', p.accent, p.text, p.cyan, 'let x = 1']) expect(drawn).toContain(part)
     expect(drawn).not.toContain('engine-reply')
+    expect(drawn).not.toContain('backgroundColor')
+    if (surface === 'terminal') {
+      // Outlined cards: the code in the engine's highlighter, the table's columns lined up.
+      expect(drawn).toContain('"borderStyle":"round"')
+      expect(drawn).toContain('"type":"Code"')
+      expect(drawn).toContain('1 row')
+    } else {
+      // SVG cards whose rows rise in, each with a Copy button.
+      expect(drawn).toContain('"type":"Svg"')
+      expect(drawn).toContain('@keyframes rise')
+      await reply.press({ key: 'copy-block-4' })
+      expect(copied.at(-1)).toBe('let x = 1')
+    }
     await reply.unmount()
     // A summary row keeps Claude Code's drawing.
     const summary = await $.ui.mount({ plugin: 'ashpack-skins', surface, component: 'AssistantMessage', props: { text: 'x', isFirstOfReply: false, isSummary: true } as never })
     expect(JSON.stringify(await summary.drawn())).toContain('engine-reply')
     await summary.unmount()
+  }
+})
+
+test('an edit draws as a diff card, a shell command as a terminal card', async ($, on) => {
+  mock.store(on)
+  on('config.list', () => ({ value: [{ key: 'theme', value: 'dark' }] }) as never)
+  on('session.cwd', () => ({ value: '/repo' }) as never)
+  const ids: string[] = []
+  on('tool.call', ($, e) => (ids.push(e.tool_use_id), { result: {} }) as never)
+  on('ui.render', { component: 'ToolResult' }, ($, e) => {
+    const { Text } = $.ui.resolve(e)
+    return <Text>engine-result</Text>
+  })
+  await $.command.run({ command: 'skin', args: 'nord' } as never)
+  const p = SKINS.find(s => s.id === 'nord')!.dark
+  const edit = {
+    filePath: '/repo/src/auth.ts',
+    structuredPatch: [{ oldStart: 3, oldLines: 2, newStart: 3, newLines: 2, lines: [' const a = 1', '-const b = 2', '+const b = 3'] }],
+  }
+  await $.tool.call({ tool: 'Bash', command: 'npm test' } as never)
+  const bashId = ids.at(-1) ?? ''
+  for (const surface of SURFACES) {
+    const diff = await $.ui.mount({ plugin: 'ashpack-skins', surface, component: 'ToolResult', props: { tool_use_id: 'e1', tool: 'Edit', output: edit, isErrored: false } as never })
+    const d = JSON.stringify(await diff.drawn())
+    expect(d).toContain('src/auth.ts')
+    expect(d).toContain('+1 −1')
+    expect(d).toContain(surface === 'terminal' ? '"format":"diff"' : p.green)
+    await diff.unmount()
+
+    const shell = await $.ui.mount({
+      plugin: 'ashpack-skins',
+      surface,
+      component: 'ToolResult',
+      requestId: bashId,
+      props: { tool_use_id: bashId, tool: 'Bash', output: { stdout: 'ok 3 tests', stderr: 'warn: slow', interrupted: false }, isErrored: false } as never,
+    })
+    const t = JSON.stringify(await shell.drawn())
+    for (const part of ['$ npm test', 'ok 3 tests', 'warn: slow', p.red]) expect(t).toContain(part)
+    expect(t).not.toContain('engine-result')
+    await shell.unmount()
+
+    // Anything else keeps Claude Code's drawing.
+    const read = await $.ui.mount({ plugin: 'ashpack-skins', surface, component: 'ToolResult', props: { tool_use_id: 'r1', tool: 'Read', output: {}, isErrored: false } as never })
+    expect(JSON.stringify(await read.drawn())).toContain('engine-result')
+    await read.unmount()
   }
 })
 
