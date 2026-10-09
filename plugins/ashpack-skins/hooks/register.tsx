@@ -53,8 +53,8 @@ const EDITS = new Set(['Edit', 'Write', 'MultiEdit'])
 
 type Active = { skin: Skin; p: Palette }
 
-// ashpack-status' compact mode hides tool rows and the spinner: skins step aside for
-// them, whatever the plugin order. Read while drawing, so a flip redraws them.
+// ashpack-status' compact mode hides tool rows: skins step aside for them, whatever the
+// plugin order. The spinner stays the skin's. Read while drawing, so a flip redraws them.
 const COMPACT = { plugin: 'ashpack-status', key: 'compact' } as const
 
 async function isCompact($: EngineInterface): Promise<boolean> {
@@ -630,7 +630,6 @@ export const register: Register = on => {
   // tokens), says the skin's word and puts the wave after it; the desktop draws the wave
   // beside the step the app names.
   on('ui.render', { component: 'Spinner' }, async ($, e, next) => {
-    if (await isCompact($)) return next(e)
     if (e.surface === 'terminal') terminalSeen = true
     const a = await active($)
     if (!a) return next(e)
