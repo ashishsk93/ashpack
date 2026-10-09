@@ -108,15 +108,14 @@ function refreshStatus($: EngineInterface): void {
 }
 
 // Where the status chips go: under the prompt (PromptHint) on the fullscreen terminal,
-// above it (AbovePrompt) on the terminal's main screen, and in the footer (SessionMode)
-// on the desktop app, which draws no mod tree under its prompt and keeps the band above
-// it for the working popup.
+// above it (AbovePrompt) everywhere else. The desktop reports fullscreen, since it docks
+// panes, but draws no mod tree under its prompt; its footer is a one-line strip that
+// truncates, so the chips cannot go there either. In the band, the working popup takes
+// the chips' place while Claude works, so the two never stack.
 const isUnderPrompt = (e: { surface: string; viewport?: { isFullscreen?: boolean } }): boolean =>
   e.surface === 'terminal' && e.viewport?.isFullscreen === true
 
-const isInFooter = (e: { surface: string }): boolean => e.surface !== 'terminal'
-
-type StatusSite = RenderInput<'PromptHint'> | RenderInput<'AbovePrompt'> | RenderInput<'SessionMode'>
+type StatusSite = RenderInput<'PromptHint'> | RenderInput<'AbovePrompt'>
 
 // The chips as a tree: outlined pills on the desktop, a spaced row on the terminal (a
 // border there costs two rows per chip). Wraps when the row is short.
@@ -540,7 +539,7 @@ export const register: Register = on => {
     if (e.surface === 'terminal') terminalSeen = true
     const [[isOn, data, now, accent], isCompactOn, a] = await Promise.all([statusInputs($), isCompact($), read($, activity)])
     const showPopup = isCompactOn && e.props.isWorking
-    const showStatus = isOn && data !== null && !isUnderPrompt(e) && !isInFooter(e)
+    const showStatus = isOn && data !== null && !isUnderPrompt(e) && !showPopup
     if (!showPopup && !showStatus) return below
 
     const { Box } = $.ui.resolve(e)
@@ -576,13 +575,11 @@ export const register: Register = on => {
   // ── footer: the mods that draw here (those without a drawer page), then "◆ AshPack" ──
   on('ui.render', { component: 'SessionMode' }, async ($, e, next) => {
     const below = await next(e)
-    const [isOpen, [isOn, data, now, accent]] = await Promise.all([read($, drawerOpen), statusInputs($)])
+    const isOpen = await read($, drawerOpen)
     const { Box, Button, Text } = $.ui.resolve(e)
-    const chips = isInFooter(e) && isOn && data ? drawChips($, e, data, now, e.viewport?.columns ?? 120, accent) : null
     return (
-      <Box columnGap={2} flexWrap="wrap" alignItems="center">
+      <Box columnGap={2}>
         {below}
-        {chips}
         <Box>
           <Text color={ACCENT}>◆ </Text>
           <Button key="ashpack" plain label={isOpen ? 'AshPack ◂' : 'AshPack ▸'} onPress={() => (isOpen ? closeDrawer($) : openDrawer($))} />

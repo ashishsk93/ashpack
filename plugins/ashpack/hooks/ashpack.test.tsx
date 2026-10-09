@@ -260,7 +260,7 @@ test('the footer opens the drawer: a side pane with a page per mod that draws on
   await pane.unmount()
 })
 
-test('the status chips draw model, branch, context and usage: above the prompt on the terminal, in the footer on the desktop', async ($, on) => {
+test('the status chips draw model, branch, context and usage above the prompt', async ($, on) => {
   mock.store(on)
   const clock = mock.clock(on, { now: Date.parse('2026-10-08T10:00:00Z') })
   on('settings.read', () => ({ value: { effortLevel: 'high', permissions: { defaultMode: 'auto' } } }))
@@ -292,10 +292,6 @@ test('the status chips draw model, branch, context and usage: above the prompt o
     const { Text } = $.ui.resolve(e)
     return <Text dimColor>{e.props.hint}</Text>
   })
-  on('ui.render', { component: 'SessionMode' }, ($, e) => {
-    const { Text } = $.ui.resolve(e)
-    return <Text>mode</Text>
-  })
 
   await $.session.start({ source: 'startup', cwd: '/Users/ashish/Documents/Code/Mods/ashpack' } as never)
   await clock.advance(0) // refreshStatus runs unawaited
@@ -307,18 +303,14 @@ test('the status chips draw model, branch, context and usage: above the prompt o
       viewport: MAIN,
       props: { hasSurvey: false, isWorking: false, maxRows: 10, bodyColumns: 140, scroll: { offset: 0, bodyRows: 10, contentRows: 0 }, view: {} } as never,
     })
-    // The terminal's main screen: the chips in the band. The desktop: in the footer, as
-    // outlined pills; its band is left to the working popup.
-    const footer = await $.ui.mount({ plugin: 'ashpack', surface, component: 'SessionMode', viewport: MAIN, props: { modes: [] } })
-    const site = surface === 'terminal' ? band : footer
-    const text = flatten(await site.drawn())
+    // The chips in the band: outlined pills on the desktop, a spaced row on the terminal.
+    const text = flatten(await band.drawn())
     for (const part of ['Opus 5.5 1M', '◕ high', '⎇ main', '●1', '↑1', 'ashpack', '$1.24', 'ctx', '42%', 'session', '23%', '↻2h14m', 'fable', '91%']) {
       expect(text).toContain(part)
     }
-    expect(flatten(await (surface === 'terminal' ? footer : band).drawn())).not.toContain('Opus')
-    if (surface !== 'terminal') expect(JSON.stringify(await footer.drawn())).toContain('"borderStyle":"round"')
+    const hasBorder = JSON.stringify(await band.drawn()).includes('"borderStyle":"round"')
+    expect(hasBorder).toBe(surface !== 'terminal')
     await band.unmount()
-    await footer.unmount()
 
     // The fullscreen terminal: the grid sits under the prompt, above the engine's hint line.
     // The desktop reports fullscreen too, but draws nothing of a mod's under its prompt: the grid stays above.
@@ -343,7 +335,8 @@ test('the status chips draw model, branch, context and usage: above the prompt o
       viewport: FULL,
       props: { hasSurvey: false, isWorking: false, maxRows: 10, bodyColumns: 140, scroll: { offset: 0, bodyRows: 10, contentRows: 0 }, view: {} } as never,
     })
-    expect(flatten(await fullBand.drawn())).not.toContain('Opus')
+    if (surface === 'terminal') expect(flatten(await fullBand.drawn())).not.toContain('Opus')
+    else expect(flatten(await fullBand.drawn())).toContain('Opus 5.5 1M')
     await fullBand.unmount()
   }
 })
@@ -378,6 +371,7 @@ test('compact mode: a half-width popup lists the turn\'s sections as rows, the r
     const drawn = JSON.stringify(await trail.drawn())
     const text = flatten(await trail.drawn())
     expect(drawn).toContain('"width":60') // half of 120
+    expect(text).not.toContain('ctx') // the popup takes the chips' place while Claude works
     expect(text).toContain('✓ Running /verify')
     expect(text).toContain('▸ Thinking…')
     // The terminal draws the loader as text per frame; the desktop as an SVG that animates itself.
