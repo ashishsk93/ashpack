@@ -140,12 +140,41 @@ export const gridWidths = (grid: Cell[][], gap: number): number[] =>
 
 export const gridBarWidth = (total: number): number => (total >= 140 ? 8 : total >= 100 ? 6 : 4)
 
-// An indeterminate bar: a block of `block` cells sliding right to left across `width`.
-export const sweep = (frame: number, width: number, block: number): string => {
-  const span = width + block
-  const head = width - 1 - (frame % span) + block // rightmost lit cell, moving left
-  return Array.from({ length: width }, (_, i) => (i <= head && i > head - block ? '▰' : '▱')).join('')
+// ── the loader: a dotted track crossed left to right by a block with a fading trail ──
+
+const SPRITE = '░▒▓██'
+
+// The terminal's loader at `frame`: `width` cells, `·` wherever the block is not.
+export const scanner = (frame: number, width: number): string => {
+  const at = (frame % (width + SPRITE.length)) - SPRITE.length + 1 // the sprite's first cell
+  return Array.from({ length: width }, (_, i) => SPRITE[i - at] ?? '·').join('')
 }
+
+const DOT = 4 // px between the desktop loader's dots
+const STEP_S = 0.07
+
+// The desktop's loader: the same picture as an SVG that animates itself (SMIL), a
+// grid of dots 5 high and `cols` wide, the block stepping one dot at a time.
+// The markup never changes, so a redraw does not restart it.
+export const scannerSvg = (color: string, cols: number): string => {
+  const w = cols * DOT
+  const h = 5 * DOT
+  const steps = Array.from({ length: cols + 7 }, (_, i) => `${(i - 3) * DOT} 0`)
+  const trail = [0.85, 0.55, 0.3]
+    .map((o, k) => `<rect x="${-(k + 1) * DOT}" width="${DOT * 0.7}" height="${h}" fill="url(#d)" opacity="${o}"/>`)
+    .join('')
+  return (
+    `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${w} ${h}" width="${w}" height="${h}" shape-rendering="crispEdges">` +
+    `<defs><pattern id="g" width="${DOT}" height="${DOT}" patternUnits="userSpaceOnUse"><rect x="${DOT / 2 - 0.5}" y="${DOT / 2 - 0.5}" width="1" height="1" fill="${color}" opacity="0.8"/></pattern>` +
+    `<pattern id="d" width="2" height="2" patternUnits="userSpaceOnUse"><rect width="1" height="1" fill="${color}"/><rect x="1" y="1" width="1" height="1" fill="${color}"/></pattern></defs>` +
+    `<rect width="${w}" height="${h}" fill="url(#g)"/>` +
+    `<g><animateTransform attributeName="transform" type="translate" calcMode="discrete" values="${steps.join(';')}" dur="${(steps.length * STEP_S).toFixed(2)}s" repeatCount="indefinite"/>` +
+    `${trail}<rect width="${DOT * 3 - 1}" height="${h}" fill="${color}"/></g></svg>`
+  )
+}
+
+// The working popup takes half the band, but no less than a readable 48 columns.
+export const popupWidth = (columns: number): number => Math.min(columns, Math.max(48, Math.ceil(columns / 2)))
 
 // ── the working popup: sections ──
 
@@ -163,6 +192,14 @@ export const segments = (plan: readonly Section[], label: string, trail: readonl
   const running = plan.findIndex(s => s.status === 'in_progress')
   const at = running >= 0 ? running : plan.findIndex(s => s.status === 'pending')
   return plan.map((s, i) => ({ title: s.title, state: s.status === 'completed' ? 'done' : i === at ? 'now' : 'todo' }))
+}
+
+// At most `n` sections, the running one kept in view (the last ones once all are done).
+export const around = (segs: readonly Segment[], n: number): Segment[] => {
+  const now = segs.findIndex(s => s.state === 'now')
+  const at = now >= 0 ? now : segs.length - 1
+  const start = Math.max(0, Math.min(at - Math.floor(n / 2), segs.length - n))
+  return segs.slice(start, start + n)
 }
 
 const STATUSES = new Set<string>(['pending', 'in_progress', 'completed'])

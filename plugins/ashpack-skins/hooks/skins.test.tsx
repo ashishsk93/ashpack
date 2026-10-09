@@ -1,6 +1,6 @@
 import { expect, mock, test } from 'claude-code/testing'
 
-import { cardLayout, duration, isLightTheme, kindOf, pick, pixelRows, pixelWidth, SKINS, targetOf, toolLabel } from './skins'
+import { cardLayout, duration, isLightTheme, kindOf, pick, pixelRows, pixelSvg, pixelWidth, SKINS, targetOf, toolLabel } from './skins'
 
 const SURFACES = ['terminal', 'desktop'] as const
 const PANE = { component: 'Pane', requestId: 'ashpack-skins' } as const
@@ -35,6 +35,11 @@ test('helpers', () => {
   expect(pixelRows('S')).toEqual([['█▀▀'], ['▀▀█'], ['▀▀▀']])
   expect(pixelWidth('ASHPACK SKINS')).toBe(50)
   expect(pixelWidth('SKINS')).toBe(20)
+  // The desktop's banner: one square per lit pixel, each letter in its own color.
+  const svg = pixelSvg('SK', ['#111111', '#222222'], 6)
+  expect(svg).toContain('viewBox="0 0 7 5" width="42" height="30"')
+  expect(svg.match(/<rect /g)).toHaveLength(11 + 10) // S has 11 lit pixels, K 10
+  expect(svg).toContain('<rect x="4" y="0" width="1" height="1" fill="#222222"/>') // K starts after S and a gap
 })
 
 test('the side pane shows a mock card per skin; pressing one picks it and reskins tool rows', async ($, on) => {
@@ -50,7 +55,8 @@ test('the side pane shows a mock card per skin; pressing one picks it and reskin
     const pane = await $.ui.mount({ plugin: 'ashpack-skins', surface, ...PANE, props: PANE_PROPS })
     for (const skin of SKINS) expect(await pane.find({ key: `skin-${skin.id}` })).toBeDefined()
     expect(await pane.find({ text: /fix the login bug/ })).toBeDefined()
-    expect(JSON.stringify(await pane.drawn())).toContain('█▀▀')
+    // The terminal's banner is half blocks; the desktop spaces lines apart, so it gets an SVG.
+    expect(JSON.stringify(await pane.drawn())).toContain(surface === 'terminal' ? '█▀▀' : '<svg')
 
     await pane.press({ key: 'skin-nord' })
     expect(JSON.stringify(await pane.drawn())).toContain('✓ on')

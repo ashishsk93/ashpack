@@ -2,6 +2,7 @@ import { expect, mock, test } from 'claude-code/testing'
 
 import {
   addTask,
+  around,
   bar,
   COLORS,
   effortLabel,
@@ -10,11 +11,13 @@ import {
   parseGit,
   packMods,
   planFromTodos,
+  popupWidth,
   prettyModel,
+  scanner,
+  scannerSvg,
   segments,
   statusGrid,
   stepTab,
-  sweep,
   tabLabel,
   updateTask,
   windowLabel,
@@ -40,7 +43,7 @@ const PANE_PROPS = {
   view: {},
 } as never
 
-test('helpers: names, bars, colors, git, tabs, sweep', () => {
+test('helpers: names, bars, colors, git, tabs, loader', () => {
   expect(prettyModel('claude-opus-5-5[1m]')).toBe('Opus 5.5 1M')
   expect(prettyModel('claude-fable-5-1')).toBe('Fable 5.1')
   expect(windowLabel('five_hour')).toBe('session')
@@ -126,11 +129,24 @@ test('helpers: names, bars, colors, git, tabs, sweep', () => {
   expect(tabLabel('ashpack-skins', 'ashpack')).toBe('skins')
   expect(tabLabel('baton', 'ashpack')).toBe('baton')
 
-  // The lit block enters at the right edge and leaves at the left.
-  expect(sweep(0, 6, 2)).toBe('▱▱▱▱▱▱')
-  expect(sweep(1, 6, 2)).toBe('▱▱▱▱▱▰')
-  expect(sweep(2, 6, 2)).toBe('▱▱▱▱▰▰')
-  expect(sweep(7, 6, 2)).toBe('▰▱▱▱▱▱')
+  // The block enters at the left edge, its trail behind it, and leaves at the right.
+  expect(scanner(0, 8)).toBe('█·······')
+  expect(scanner(4, 8)).toBe('░▒▓██···')
+  expect(scanner(7, 8)).toBe('···░▒▓██')
+  expect(scanner(11, 8)).toBe('·······░')
+  expect(scanner(13, 8)).toBe(scanner(0, 8))
+  // The desktop's loader is one fixed SVG that animates itself.
+  expect(scannerSvg('#82aaff', 40)).toBe(scannerSvg('#82aaff', 40))
+  expect(scannerSvg('#82aaff', 40)).toMatch(/^<svg .*<animateTransform .*repeatCount="indefinite".*<\/svg>$/)
+
+  // The popup: half the band, never under 48 columns; at most n rows, the running one in view.
+  expect(popupWidth(160)).toBe(80)
+  expect(popupWidth(70)).toBe(48)
+  expect(popupWidth(40)).toBe(40)
+  const many = planFromTodos(['a', 'b', 'c', 'd', 'e', 'f', 'g'].map((content, i) => ({ content, status: i < 5 ? 'completed' : 'pending' })))
+  expect(around(segments(many, 'x', []), 3).map(s => s.title)).toEqual(['e', 'f', 'g'])
+  expect(around(segments(many.map(s => ({ ...s, status: 'completed' as const })), 'x', []), 3).map(s => s.title)).toEqual(['e', 'f', 'g'])
+  expect(around(segments([], 'x', []), 3).map(s => s.title)).toEqual(['x'])
 })
 
 test('the panel toggles compact mode and status rows; compact mode hides tool rows', async ($, on) => {
@@ -189,7 +205,19 @@ test('the footer drawer folds other mods into tabs of a floating card', async ($
     expect(await footer.find({ text: /focus/ })).toBeDefined()
     expect((await footer.find({ key: 'ashpack' }))?.text).toContain('▸')
 
-    // Fullscreen: a card floats above the footer, AshPack's tab first; no pane opens.
+    // The desktop reports fullscreen (it docks panes) but draws no floating card: a pane opens.
+    if (surface === 'desktop') {
+      await footer.press({ key: 'ashpack' })
+      expect(opened).toEqual(['ashpack-drawer'])
+      expect(JSON.stringify(await footer.drawn())).not.toContain('"position":"absolute"')
+      expect(await footer.find({ text: /baton-badge/ })).toBeDefined()
+      await footer.press({ key: 'ashpack' })
+      await footer.unmount()
+      opened.length = 0
+      continue
+    }
+
+    // The fullscreen terminal: a card floats above the footer, AshPack's tab first; no pane opens.
     await footer.press({ key: 'ashpack' })
     expect((await footer.find({ key: 'ashpack' }))?.text).toContain('◂')
     expect(opened).toEqual([])
@@ -308,7 +336,7 @@ test('the status rows draw model, branch, context and usage bars above the promp
   }
 })
 
-test('compact mode: a full-width popup splits the turn into the task list\'s sections', async ($, on) => {
+test('compact mode: a half-width popup lists the turn\'s sections as rows, the running one with a loader', async ($, on) => {
   mock.store(on)
   mock.clock(on, { now: Date.parse('2026-10-08T10:00:00Z') })
   on('ui.render', { component: 'AbovePrompt' }, ($, e) => {
@@ -321,32 +349,32 @@ test('compact mode: a full-width popup splits the turn into the task list\'s sec
   await footer.press({ key: 'compact' })
   await $.turn.start({ prompt: 'go', turnId: 't1' } as never)
   const bandProps = { hasSurvey: false, isWorking: true, maxRows: 10, bodyColumns: 120, scroll: { offset: 0, bodyRows: 10, contentRows: 0 }, view: {} } as never
-  // No task list: the finished step, narrow, then the running one filling the row; no empty slots.
+  // No task list: the finished step, then the running one with the loader beside it.
   await $.tool.call({ tool: 'Skill', skill: 'verify' } as never)
-  const trail = await $.ui.mount({ plugin: 'ashpack', surface: 'terminal', component: 'AbovePrompt', viewport: FULL, props: bandProps })
-  const trailText = flatten(await trail.drawn())
-  expect(trailText).toContain('✓ Running /verify')
-  expect(trailText).toContain('Thinking…')
-  expect(JSON.stringify(await trail.drawn())).toContain('"width":23') // 116 / 5, the finished step
-  expect(JSON.stringify(await trail.drawn())).toContain('"width":91') // 116 - (23 + 2), the running step
-  await trail.unmount()
+  for (const surface of SURFACES) {
+    const trail = await $.ui.mount({ plugin: 'ashpack', surface, component: 'AbovePrompt', viewport: FULL, props: bandProps })
+    const drawn = JSON.stringify(await trail.drawn())
+    const text = flatten(await trail.drawn())
+    expect(drawn).toContain('"width":60') // half of 120
+    expect(text).toContain('✓ Running /verify')
+    expect(text).toContain('▸ Thinking…')
+    // The terminal draws the loader as text per frame; the desktop as an SVG that animates itself.
+    if (surface === 'terminal') expect(text).toMatch(/·+|█/)
+    else expect(drawn).toContain('animateTransform')
+    await trail.unmount()
+  }
 
   await $.tool.call({ tool: 'TodoWrite', todos: [
     { content: 'Read the code', status: 'completed', activeForm: 'Reading' },
     { content: 'Fix the card', status: 'in_progress', activeForm: 'Fixing' },
     { content: 'Run tests', status: 'pending', activeForm: 'Testing' },
   ] } as never)
-  const band = await $.ui.mount({
-    plugin: 'ashpack',
-    surface: 'terminal',
-    component: 'AbovePrompt',
-    viewport: FULL,
-    props: { hasSurvey: false, isWorking: true, maxRows: 10, bodyColumns: 120, scroll: { offset: 0, bodyRows: 10, contentRows: 0 }, view: {} } as never,
-  })
-  const drawn = JSON.stringify(await band.drawn())
+  const band = await $.ui.mount({ plugin: 'ashpack', surface: 'terminal', component: 'AbovePrompt', viewport: FULL, props: bandProps })
   const text = flatten(await band.drawn())
-  expect(drawn).toContain('"width":120')
-  for (const part of ['◆ AshPack', '✓ Read the code', 'Fix the card', 'Run tests', '1/3']) expect(text).toContain(part)
+  for (const part of ['◆ AshPack', '✓ Read the code', '▸ Fix the card', '○ Run tests', '1/3']) expect(text).toContain(part)
+  // One row per section: the order reads top to bottom.
+  expect(text.indexOf('Read the code')).toBeLessThan(text.indexOf('Fix the card'))
+  expect(text.indexOf('Fix the card')).toBeLessThan(text.indexOf('Run tests'))
   await band.unmount()
   await footer.unmount()
 })

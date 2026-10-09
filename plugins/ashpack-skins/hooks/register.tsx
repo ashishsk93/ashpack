@@ -2,7 +2,7 @@ import { atom, memberOf, read, update } from 'claude-code'
 import type { EngineInterface, Register, RenderInput } from 'claude-code'
 
 import type { Palette, Skin } from './skins'
-import { cardLayout, duration, isLightTheme, kindColor, kindOf, OFF, paletteOf, pick, pixelRows, pixelWidth, SKINS, skinById, targetOf, toolLabel } from './skins'
+import { cardLayout, duration, isLightTheme, kindColor, kindOf, OFF, paletteOf, pick, pixelRows, pixelSvg, pixelWidth, SKINS, skinById, targetOf, toolLabel } from './skins'
 
 // AshPack Skins. Redraws the prompt, tool rows, spinner words and turn footer in
 // a skin's colors with Box and Text only, so the terminal and the desktop app
@@ -19,6 +19,7 @@ const CARD_GAP = 2
 const MAX_PROMPT = 4000 // a longer paste keeps Claude Code's folding
 const BANNER = 'ASHPACK SKINS'
 const SHORT_BANNER = 'SKINS'
+const BANNER_PX = 6 // the desktop banner's pixel, in CSS pixels
 
 // Only a person's own typing becomes a skinned prompt row.
 const TYPED = new Set(['composer', 'bridge', 'sdk'])
@@ -88,46 +89,52 @@ function card($: EngineInterface, e: RenderInput<'Pane'>, skin: Skin, index: num
         {i === line.length - 1 ? text + end : text}
       </Text>
     ))
-  // The terminal makes the whole mock one button. The desktop draws a Button holding
-  // Text children as nothing, so there the mock is text and the title picks it.
-  const mock =
-    e.surface === 'terminal' ? (
-      <Button key={`mock-${skin.id}`} plain onPress={pickIt}>
-        {lines.flatMap((line, r) => spans(line, r, r < lines.length - 1 ? '\n' : ''))}
-      </Button>
-    ) : (
-      <Box key={`mock-${skin.id}`} flexDirection="column">
+  const mark = isPicked ? (isOnNow ? '✓ on' : '· off') : ''
+  const pickButton = <Button key={`skin-${skin.id}`} plain {...(hotkey ? { hotkey } : {})} label={skin.label} onPress={pickIt} />
+  const frame = { flexDirection: 'column', borderStyle: 'round', borderColor: isPicked ? p.accent : p.muted, backgroundColor: p.bg, paddingX: 1 } as const
+  // The terminal: the title inside the card, and the whole mock one button.
+  if (e.surface === 'terminal') {
+    return (
+      <Box key={`card-${skin.id}`} width={width} {...frame}>
+        <Box justifyContent="space-between">
+          {pickButton}
+          <Text color={isOnNow ? p.green : p.muted}>{mark}</Text>
+        </Box>
+        <Button key={`mock-${skin.id}`} plain onPress={pickIt}>
+          {lines.flatMap((line, r) => spans(line, r, r < lines.length - 1 ? '\n' : ''))}
+        </Button>
+      </Box>
+    )
+  }
+  // The desktop draws its buttons in its own colors, unreadable on a dark card, and a
+  // Button holding Text as nothing: the title button sits above the card, the mock is text.
+  return (
+    <Box key={`card-${skin.id}`} flexDirection="column" width={width}>
+      <Box justifyContent="space-between">
+        {pickButton}
+        <Text bold>{mark}</Text>
+      </Box>
+      <Box key={`mock-${skin.id}`} {...frame}>
         {lines.map((line, r) => (
           <Text key={`${skin.id}-line-${r}`} wrap="truncate-end">
             {spans(line, r, '')}
           </Text>
         ))}
       </Box>
-    )
-  return (
-    <Box
-      key={`card-${skin.id}`}
-      flexDirection="column"
-      width={width}
-      borderStyle="round"
-      borderColor={isPicked ? p.accent : p.muted}
-      backgroundColor={p.bg}
-      paddingX={1}
-    >
-      <Box justifyContent="space-between">
-        <Button key={`skin-${skin.id}`} plain {...(hotkey ? { hotkey } : {})} label={skin.label} onPress={pickIt} />
-        <Text color={isOnNow ? p.green : p.muted}>{isPicked ? (isOnNow ? '✓ on' : '· off') : ''}</Text>
-      </Box>
-      {mock}
     </Box>
   )
 }
 
 // The pane's pixel-art title, each letter in a color of the picked skin; a narrow pane gets the short one.
+// The terminal draws it in half blocks; the desktop as an SVG, since it spaces text lines apart.
 function banner($: EngineInterface, e: RenderInput<'Pane'>, p: Palette) {
-  const { Box, Text } = $.ui.resolve(e)
   const word = pixelWidth(BANNER) <= e.props.bodyColumns ? BANNER : SHORT_BANNER
   const colors = [p.accent, p.pink, p.purple, p.blue, p.cyan, p.green, p.yellow]
+  if (e.surface !== 'terminal') {
+    const { Svg } = $.ui.resolve(e)
+    return <Svg key="banner" source={pixelSvg(word, colors, BANNER_PX)} alt={word} />
+  }
+  const { Box, Text } = $.ui.resolve(e)
   return (
     <Box key="banner" flexDirection="column">
       {pixelRows(word).map((letters, r) => (

@@ -5,7 +5,7 @@ import type { Activity, PackMod, Section, StatusData } from '../types'
 import type { Cell, Segment } from './format'
 import {
   addTask,
-  bar,
+  around,
   COLORS,
   describeTool,
   gridBarWidth,
@@ -13,10 +13,12 @@ import {
   parseGit,
   packMods,
   planFromTodos,
+  popupWidth,
+  scanner,
+  scannerSvg,
   segments,
   statusGrid,
   stepTab,
-  sweep,
   TRAIL,
   updateTask,
   tabLabel,
@@ -39,7 +41,8 @@ const DRAWER = 'ashpack-drawer'
 const STATUS_TICK_MS = 30_000
 const FRAME_MS = 120
 const GRID_GAP = 2 // columns between a status section's text and the next "│"
-const SEG_GAP = 2 // columns between the popup's sections
+const POPUP_ROWS = 5 // sections the working popup shows at most
+const LOADER_DOTS = 40 // the desktop loader's width, in dots
 const ACCENT = COLORS.accent
 const BLUE = COLORS.blue
 const CARD_WIDTH = 46
@@ -161,29 +164,48 @@ const seconds = (ms: number): string => {
   return s < 60 ? `${s}s` : `${Math.floor(s / 60)}m ${s % 60}s`
 }
 
-// The working popup, full width: what it is doing now, then the sections, the
-// running one swept right to left and the finished ones filled.
+// The running section's loader: redrawn per frame on the terminal; an SVG that
+// animates itself elsewhere, so the desktop never redraws for it.
+function loader($: EngineInterface, e: RenderInput<'AbovePrompt'>, f: number, cells: number) {
+  if (e.surface !== 'terminal') {
+    const { Svg } = $.ui.resolve(e)
+    return <Svg key="loader" source={scannerSvg(BLUE, LOADER_DOTS)} alt="Working" />
+  }
+  const { Text } = $.ui.resolve(e)
+  const runs = scanner(f, cells).match(/·+|[^·]+/g) ?? []
+  return (
+    <Text key="loader">
+      {runs.map((run, i) => (
+        <Text key={`run-${i}`} color={BLUE} dimColor={run.startsWith('·')}>
+          {run}
+        </Text>
+      ))}
+    </Text>
+  )
+}
+
+const MARK: Record<Segment['state'], string> = { done: '✓', now: '▸', todo: '○' }
+
+// The working popup, half the band wide: what it is doing, then a row per section,
+// the finished ones ticked and the running one with the loader beside it.
 async function drawPopup($: EngineInterface, e: RenderInput<'AbovePrompt'>, a: Activity | null, now: number) {
   const { Box, Text } = $.ui.resolve(e)
-  const [list, f] = await Promise.all([read($, plan), read($, frame)])
-  const cols = e.props.bodyColumns
-  const segs = segments(list, a?.label ?? 'Thinking', a?.trail ?? [])
-  const inner = cols - 4 // border and padding
-  // A task list shares the row evenly. A trail keeps finished steps narrow and
-  // gives the running step the rest, so the row is always full.
+  const isTerminal = e.surface === 'terminal'
+  // Reading `frame` redraws per tick: the terminal only.
+  const [list, f] = await Promise.all([read($, plan), isTerminal ? read($, frame) : 0])
+  const width = popupWidth(e.props.bodyColumns)
+  const inner = width - 4 // border and padding
+  const titleWidth = Math.floor(inner * 0.55)
   const isTrail = list.length === 0
-  const evenWidth = Math.max(3, Math.floor((inner - SEG_GAP * (segs.length - 1)) / segs.length))
-  const doneWidth = Math.max(12, Math.floor(inner / 5))
-  const nowWidth = Math.max(3, inner - (segs.length - 1) * (doneWidth + SEG_GAP))
-  const widthOf = (s: Segment) => (!isTrail ? evenWidth : s.state === 'now' ? nowWidth : doneWidth)
+  const segs = around(segments(list, a?.label ?? 'Thinking', a?.trail ?? []), POPUP_ROWS)
   const done = list.filter(s => s.status === 'completed').length
   const facts = [
     list.length > 0 ? `${done}/${list.length}` : '',
-    a ? seconds(now - a.startedAt) : '',
+    a && isTerminal ? seconds(now - a.startedAt) : '', // the desktop draws no ticks, so the time would stand still
     a && a.steps > 0 ? `${a.steps} step${a.steps === 1 ? '' : 's'}` : '',
   ].filter(Boolean)
   return (
-    <Box flexDirection="column" borderStyle="round" borderColor={ACCENT} paddingX={1} width={cols}>
+    <Box flexDirection="column" borderStyle="round" borderColor={ACCENT} paddingX={1} width={width}>
       <Box justifyContent="space-between" columnGap={2}>
         <Text wrap="truncate-end">
           <Text bold color={ACCENT}>
@@ -194,24 +216,22 @@ async function drawPopup($: EngineInterface, e: RenderInput<'AbovePrompt'>, a: A
         </Text>
         <Text dimColor>{facts.join(' · ')}</Text>
       </Box>
-      <Box columnGap={SEG_GAP}>
-        {segs.map((s, i) => {
-          const width = widthOf(s)
-          const color = s.state === 'now' ? BLUE : s.state === 'done' ? COLORS.ok : undefined
-          return (
-            <Box key={`seg-${i}`} flexDirection="column" width={width}>
-              <Text wrap="truncate-end" bold={s.state === 'now'} color={s.state === 'now' ? ACCENT : color} dimColor={s.state === 'todo'}>
-                {s.state === 'done' ? '✓ ' : ''}
-                {s.title}
-                {s.state === 'now' && isTrail ? '…' : ''}
-              </Text>
-              <Text color={color} dimColor={s.state === 'todo'}>
-                {s.state === 'now' ? sweep(f, width, Math.max(2, Math.min(12, Math.floor(width / 6)))) : bar(s.state === 'done' ? 100 : 0, width)}
-              </Text>
-            </Box>
-          )
-        })}
-      </Box>
+      {segs.map((s, i) => (
+        <Box key={`seg-${i}`} columnGap={1}>
+          <Box width={titleWidth}>
+            <Text
+              wrap="truncate-end"
+              bold={s.state === 'now'}
+              color={s.state === 'now' ? ACCENT : s.state === 'done' ? COLORS.ok : undefined}
+              dimColor={s.state === 'todo'}
+            >
+              {MARK[s.state]} {s.title}
+              {s.state === 'now' && isTrail ? '…' : ''}
+            </Text>
+          </Box>
+          {s.state === 'now' ? loader($, e, f, inner - titleWidth - 1) : null}
+        </Box>
+      ))}
     </Box>
   )
 }
@@ -263,14 +283,37 @@ async function packAction($: EngineInterface, mod: PackMod | null): Promise<void
   }
 }
 
-// Fullscreen: the footer draws a card over the transcript. Elsewhere a card
-// would be clipped to the footer's one row, so a small pane opens instead.
-async function openDrawer($: EngineInterface, isFullscreen: boolean): Promise<void> {
+// The fullscreen terminal's footer draws a card over the transcript. Elsewhere a
+// pane opens instead: the main screen would clip a card to the footer's one row,
+// and the desktop draws no floating card (it docks the pane in its side panel).
+async function openDrawer($: EngineInterface, isFloating: boolean): Promise<void> {
   await loadPack($)
   await update($, drawerOpen, () => true)
-  if (!isFullscreen) {
-    await $.ui.open({ id: DRAWER, title: 'AshPack', focus: true, closeOnEscape: true, holdToasts: true, rows: 5, columns: 40 })
+  if (!isFloating) {
+    await $.ui.open({ id: DRAWER, title: 'AshPack', focus: true, closeOnEscape: true, holdToasts: true, rows: 7, columns: 48 })
   }
+}
+
+// The pack's mods, one button each, and the pack's update button.
+// ponytail: one row of mods; past ~5 they need paging (the card has one row to give)
+function modsRow($: EngineInterface, e: RenderInput<'SessionMode'> | RenderInput<'Pane'>, mods: PackMod[], busy: string | null) {
+  const { Box, Button, Text } = $.ui.resolve(e)
+  if (mods.length === 0) return <Text dimColor>No "{PACK}" marketplace found</Text>
+  const mark = (m: PackMod) => (busy === m.name ? '…' : m.state === 'on' ? '●' : m.state === 'off' ? '○' : '+')
+  return (
+    <Box columnGap={2}>
+      {mods.map(m =>
+        m.name === PACK ? (
+          <Text key={`mod-${m.name}`} color={ACCENT}>
+            ◆ {m.name}
+          </Text>
+        ) : (
+          <Button key={`mod-${m.name}`} plain dimColor={m.state !== 'on'} label={`${mark(m)} ${m.name}`} onPress={() => packAction($, m)} />
+        ),
+      )}
+      <Button key="mods-update" plain dimColor label={busy === 'update' ? '… update' : '↻ update'} onPress={() => packAction($, null)} />
+    </Box>
+  )
 }
 
 async function closeDrawer($: EngineInterface): Promise<void> {
@@ -450,7 +493,8 @@ export const register: Register = on => {
 
   // ── footer: the drawer. Closed: "◆ AshPack ▸". Open: "◂" and a card with a tab per footer mod. ──
   on('ui.render', { component: 'SessionMode' }, async ($, e, next) => {
-    const isFullscreen = e.viewport?.isFullscreen === true
+    // Only the fullscreen terminal floats a card; the desktop reports fullscreen too (it docks panes).
+    const isFloating = e.surface === 'terminal' && e.viewport?.isFullscreen === true
     const [isOpen, isCompactOn, isStatusOn, picked, mods, busy] = await Promise.all([
       read($, drawerOpen),
       read($, compact),
@@ -468,7 +512,7 @@ export const register: Register = on => {
           key="ashpack"
           plain
           label={isOpen ? 'AshPack ◂' : 'AshPack ▸'}
-          onPress={() => (isOpen ? closeDrawer($) : openDrawer($, isFullscreen))}
+          onPress={() => (isOpen ? closeDrawer($) : openDrawer($, isFloating))}
         />
       </Box>
     )
@@ -482,7 +526,7 @@ export const register: Register = on => {
     }
     // The mods beneath draw their own badges (so their buttons work); the modes are drawn once, here.
     const beneath = await next({ ...e, props: { ...e.props, modes: [] } })
-    if (!isFullscreen) {
+    if (!isFloating) {
       return (
         <Box columnGap={2}>
           {modes}
@@ -508,29 +552,10 @@ export const register: Register = on => {
         <Button key={key} plain label={isOn ? '● ON ' : '○ OFF'} onPress={onPress} />
       </Box>
     )
-    const mark = (m: PackMod) => (busy === m.name ? '…' : m.state === 'on' ? '●' : m.state === 'off' ? '○' : '+')
-    // ponytail: one row of mods; past ~5 they need paging (the card has one row to give)
-    const modsRow =
-      mods.length === 0 ? (
-        <Text dimColor>No "{PACK}" marketplace found</Text>
-      ) : (
-        <Box columnGap={2}>
-          {mods.map(m =>
-            m.name === PACK ? (
-              <Text key={`mod-${m.name}`} color={ACCENT}>
-                ◆ {m.name}
-              </Text>
-            ) : (
-              <Button key={`mod-${m.name}`} plain dimColor={m.state !== 'on'} label={`${mark(m)} ${m.name}`} onPress={() => packAction($, m)} />
-            ),
-          )}
-          <Button key="mods-update" plain dimColor label={busy === 'update' ? '… update' : '↻ update'} onPress={() => packAction($, null)} />
-        </Box>
-      )
     const body =
       active.tree ??
       (active.name === MODS_TAB ? (
-        modsRow
+        modsRow($, e, mods, busy)
       ) : (
         <Box columnGap={3}>
           {toggle1('compact', 'Compact', isCompactOn, () => toggle($, 'compact'))}
@@ -604,7 +629,7 @@ export const register: Register = on => {
   })
 
   on('ui.render', { component: 'Pane', requestId: DRAWER }, async ($, e) => {
-    const [isCompactOn, isStatusOn] = await Promise.all([read($, compact), read($, statusOn)])
+    const [isCompactOn, isStatusOn, mods, busy] = await Promise.all([read($, compact), read($, statusOn), read($, pack), read($, packBusy)])
     const { Box, Button, Text } = $.ui.resolve(e)
     const switchRow = (key: string, hotkey: string, label: string, isOn: boolean, onPress: () => unknown) => (
       <Box key={`row-${key}`} columnGap={2}>
@@ -619,6 +644,12 @@ export const register: Register = on => {
       <Box flexDirection="column">
         {switchRow('compact', 'c', 'Compact mode', isCompactOn, () => toggle($, 'compact'))}
         {switchRow('status', 's', 'Status rows', isStatusOn, () => toggle($, 'statusOn'))}
+        <Box columnGap={2}>
+          <Box width={16}>
+            <Text>Mods</Text>
+          </Box>
+          {modsRow($, e, mods, busy)}
+        </Box>
         <Box columnGap={2}>
           <Text dimColor>Esc closes</Text>
           <Button key="close" role="dismiss" plain dimColor label="close" onPress={() => closeDrawer($)} />

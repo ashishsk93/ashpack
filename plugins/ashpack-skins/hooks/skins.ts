@@ -220,6 +220,20 @@ export const pixelRows = (word: string): string[][] =>
     }),
   )
 
+// `word` as an SVG of square pixels, each letter in the next of `colors`: the desktop
+// spaces its text lines apart, so half-block glyphs do not tile there.
+export const pixelSvg = (word: string, colors: readonly string[], px: number): string => {
+  const letters = [...word].map(ch => FONT[ch] ?? FONT[' ']!)
+  const lefts = letters.map((_, i) => letters.slice(0, i).reduce((x, g) => x + g[0]!.length + 1, 0))
+  const rects = letters.flatMap((glyph, i) =>
+    glyph.flatMap((row, y) =>
+      [...row].flatMap((c, dx) => (c === '#' ? [`<rect x="${lefts[i]! + dx}" y="${y}" width="1" height="1" fill="${colors[i % colors.length]}"/>`] : [])),
+    ),
+  )
+  const w = pixelWidth(word)
+  return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${w} 5" width="${w * px}" height="${5 * px}" shape-rendering="crispEdges">${rects.join('')}</svg>`
+}
+
 // Columns the banner takes: its letters and a 1-column gap between them.
 export const pixelWidth = (word: string): number =>
   [...word].reduce((sum, ch) => sum + (FONT[ch] ?? FONT[' ']!)[0]!.length, 0) + Math.max(0, [...word].length - 1)
