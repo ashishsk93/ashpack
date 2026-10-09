@@ -74,7 +74,12 @@ test('the side pane shows a mock card per skin; pressing one picks it and reskin
 
     // The whole mock picks its skin, and turns skins on.
     await pane.press({ key: 'skin-toggle' })
-    await pane.press({ key: 'mock-monokai' })
+    // The terminal's whole mock is a button; the desktop's mock is text (a Button of Text draws nothing there).
+    if (surface === 'terminal') await pane.press({ key: 'mock-monokai' })
+    else {
+      expect(JSON.stringify(await pane.drawn())).not.toMatch(/"type":"Button"[^}]*"key":"mock-/)
+      await pane.press({ key: 'skin-monokai' })
+    }
     expect((await pane.find({ key: 'skin-toggle' }))?.text).toContain('ON')
     expect(JSON.stringify(await row.drawn())).toContain(SKINS.find(s => s.id === 'monokai')?.dark.blue)
     await pane.press({ key: 'skin-toggle' })

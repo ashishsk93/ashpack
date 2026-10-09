@@ -74,6 +74,36 @@ function card($: EngineInterface, e: RenderInput<'Pane'>, skin: Skin, index: num
   const p = paletteOf(skin, light)
   const pickIt = () => choose($, skin.id)
   const hotkey = HOTKEYS[index]
+  // Each line of the mock as colored spans.
+  const lines: [string, string, boolean?][][] = [
+    [[p.accent, '▍ '], [p.text, 'fix the login bug']],
+    [[p.blue, '● Read', true], [p.muted, ' src/auth.ts']],
+    [[p.yellow, '● Edit', true], [p.muted, ' auth.ts '], [p.green, '+4 '], [p.red, '−1']],
+    [[p.green, '● Bash', true], [p.muted, ' npm test']],
+    [[p.accent, `✻ ${skin.words[0]}…`]],
+  ]
+  const spans = (line: [string, string, boolean?][], r: number, end: string) =>
+    line.map(([color, text, bold], i) => (
+      <Text key={`${skin.id}-${r}-${i}`} color={color} bold={bold}>
+        {i === line.length - 1 ? text + end : text}
+      </Text>
+    ))
+  // The terminal makes the whole mock one button. The desktop draws a Button holding
+  // Text children as nothing, so there the mock is text and the title picks it.
+  const mock =
+    e.surface === 'terminal' ? (
+      <Button key={`mock-${skin.id}`} plain onPress={pickIt}>
+        {lines.flatMap((line, r) => spans(line, r, r < lines.length - 1 ? '\n' : ''))}
+      </Button>
+    ) : (
+      <Box key={`mock-${skin.id}`} flexDirection="column">
+        {lines.map((line, r) => (
+          <Text key={`${skin.id}-line-${r}`} wrap="truncate-end">
+            {spans(line, r, '')}
+          </Text>
+        ))}
+      </Box>
+    )
   return (
     <Box
       key={`card-${skin.id}`}
@@ -88,19 +118,7 @@ function card($: EngineInterface, e: RenderInput<'Pane'>, skin: Skin, index: num
         <Button key={`skin-${skin.id}`} plain {...(hotkey ? { hotkey } : {})} label={skin.label} onPress={pickIt} />
         <Text color={isOnNow ? p.green : p.muted}>{isPicked ? (isOnNow ? '✓ on' : '· off') : ''}</Text>
       </Box>
-      <Button key={`mock-${skin.id}`} plain onPress={pickIt}>
-        <Text color={p.accent}>▍ </Text>
-        <Text color={p.text}>fix the login bug{'\n'}</Text>
-        <Text color={p.blue} bold>● Read</Text>
-        <Text color={p.muted}> src/auth.ts{'\n'}</Text>
-        <Text color={p.yellow} bold>● Edit</Text>
-        <Text color={p.muted}> auth.ts </Text>
-        <Text color={p.green}>+4 </Text>
-        <Text color={p.red}>−1{'\n'}</Text>
-        <Text color={p.green} bold>● Bash</Text>
-        <Text color={p.muted}> npm test{'\n'}</Text>
-        <Text color={p.accent}>✻ {skin.words[0]}…</Text>
-      </Button>
+      {mock}
     </Box>
   )
 }
