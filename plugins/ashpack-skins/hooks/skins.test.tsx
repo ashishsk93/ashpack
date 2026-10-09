@@ -206,12 +206,16 @@ test('a reply draws in the skin\'s colors, with code and tables as cards', async
   on('ui.toast', () => ({ value: undefined }))
   await $.command.run({ command: 'skin', args: 'dracula' } as never)
   const p = SKINS.find(s => s.id === 'dracula')!.dark
-  const text = ['## Plan', 'Use **bold** and `code`.', '- one', '- two', '```ts', 'let x = 1', '```', '| a | b |', '|---|---|', '| 1 | 2 |'].join('\n')
+  const text = ['## Plan', 'Use **bold** and `code`, see [the docs](https://x.dev) and [README.md](README.md).', '- one', '- two', '```ts', 'let x = 1', '```', '| a | b |', '|---|---|', '| 1 | 2 |'].join('\n')
   for (const surface of SURFACES) {
     const reply = await $.ui.mount({ plugin: 'ashpack-skins', surface, component: 'AssistantMessage', props: { text, isFirstOfReply: true } as never, viewport: { columns: 120, rows: 40 } as never })
     const drawn = JSON.stringify(await reply.drawn())
     for (const part of ['Plan', p.accent, p.text, p.cyan, 'let x = 1']) expect(drawn).toContain(part)
     expect(drawn).not.toContain('engine-reply')
+    // A URL is a Link; a relative path is underlined text (the engine refuses a Link to it).
+    expect(drawn).toContain('"href":"https://x.dev"')
+    expect(drawn).not.toContain('"href":"README.md"')
+    expect(drawn).toContain('"underline":true')
     if (surface === 'terminal') {
       // The code in Claude Code's highlighter with a Copy; the table as an outlined grid.
       expect(drawn).toContain('"type":"Code"')

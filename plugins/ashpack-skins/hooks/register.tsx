@@ -51,6 +51,8 @@ const EDITS = new Set(['Edit', 'Write', 'MultiEdit'])
 
 type Active = { skin: Skin; p: Palette }
 
+const isUrl = (href: string): boolean => /^(https?|mailto|file):/i.test(href)
+
 // ashpack-status' compact mode hides tool rows: skins step aside for them, whatever the
 // plugin order. The spinner stays the skin's. Read while drawing, so a flip redraws them.
 const COMPACT = { plugin: 'ashpack-status', key: 'compact' } as const
@@ -365,12 +367,16 @@ function groupRowTree($: EngineInterface, e: RenderInput<'ToolGroup'>, p: Palett
 async function replyBlocks($: EngineInterface, e: RenderInput<'AssistantMessage'>, a: Active, blocks: readonly Block[]) {
   const { p } = a
   const width = cardWidth(e.viewport?.columns)
-  // Which of the desktop's cards are new, so only they rise in.
   const { Box, Code, Link, Markdown, Text, Button } = $.ui.resolve(e)
+  // A Link needs a URL; a relative path ([README.md](README.md)) stays text, underlined.
   const spans = (list: readonly Inline[], key: string, color: string) =>
     list.map((s, i) =>
-      s.kind === 'link' && s.href ? (
+      s.kind === 'link' && s.href && isUrl(s.href) ? (
         <Link key={`${key}-${i}`} href={s.href} label={s.text} />
+      ) : s.kind === 'link' ? (
+        <Text key={`${key}-${i}`} color={p.blue} underline>
+          {s.text}
+        </Text>
       ) : (
         <Text key={`${key}-${i}`} color={s.kind === 'code' ? p.cyan : color} bold={s.kind === 'bold'} italic={s.kind === 'italic'}>
           {s.text}
