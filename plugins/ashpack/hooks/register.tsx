@@ -9,14 +9,13 @@ import {
   COLORS,
   describeTool,
   findPages,
-  gridBarWidth,
-  gridWidths,
+  chipBarWidth,
   parseGit,
   packMods,
   planFromTodos,
   popupWidth,
   segments,
-  statusGrid,
+  statusChips,
   TRAIL,
   updateTask,
   wave,
@@ -38,7 +37,6 @@ const DRAWER = 'ashpack' // the drawer pane's id; mods hook its render to add a 
 const DRAWER_COLUMNS = 64
 const STATUS_TICK_MS = 30_000
 const FRAME_MS = 120
-const GRID_GAP = 2 // columns between a status section's text and the next "│"
 const POPUP_ROWS = 5 // sections the working popup shows at most
 const LOADER_PX = 120 // the desktop loader's width, in CSS pixels
 const LOADER_CELLS = 12 // the terminal loader's width at most
@@ -48,6 +46,10 @@ const PACK = 'ashpack' // the marketplace the pack's mods come from
 const CLI_TIMEOUT_MS = 120_000
 const COMPACT_KEY = 'compact' // $.store keys: toggles survive sessions
 const STATUS_KEY = 'statusOn'
+
+// The loader and the model chip wear the skin's accent when one is on.
+const loaderColor = async ($: EngineInterface): Promise<string> => (await skinAccent($)) || BLUE
+const accentColor = async ($: EngineInterface): Promise<string> => (await skinAccent($)) || ACCENT
 
 const compact = atom({ plugin: 'ashpack', key: 'compact' } as const, false)
 const statusOn = atom({ plugin: 'ashpack', key: 'statusOn' } as const, true)
@@ -105,46 +107,49 @@ function refreshStatus($: EngineInterface): void {
   void loadStatus($).catch(err => $.ui.log(`ashpack status: ${String(err)}`, { to: 'debug' }))
 }
 
-// Where the status rows go: under the prompt (PromptHint) on the fullscreen terminal,
-// above it (AbovePrompt) everywhere else. The desktop reports fullscreen, since it docks
-// panes, but draws no mod tree under its prompt.
+// Where the status chips go: under the prompt (PromptHint) on the fullscreen terminal,
+// above it (AbovePrompt) on the terminal's main screen, and in the footer (SessionMode)
+// on the desktop app, which draws no mod tree under its prompt and keeps the band above
+// it for the working popup.
 const isUnderPrompt = (e: { surface: string; viewport?: { isFullscreen?: boolean } }): boolean =>
   e.surface === 'terminal' && e.viewport?.isFullscreen === true
 
-// The grid as a tree: each section a fixed-width Box, so the rows line up.
-function drawGrid($: EngineInterface, e: RenderInput<'PromptHint'> | RenderInput<'AbovePrompt'>, data: StatusData, now: number, total: number) {
+const isInFooter = (e: { surface: string }): boolean => e.surface !== 'terminal'
+
+type StatusSite = RenderInput<'PromptHint'> | RenderInput<'AbovePrompt'> | RenderInput<'SessionMode'>
+
+// The chips as a tree: outlined pills on the desktop, a spaced row on the terminal (a
+// border there costs two rows per chip). Wraps when the row is short.
+function drawChips($: EngineInterface, e: StatusSite, data: StatusData, now: number, total: number, accent: string) {
   const { Box, Text } = $.ui.resolve(e)
-  const grid = statusGrid(data, now, gridBarWidth(total))
-  const widths = gridWidths(grid, GRID_GAP)
-  const cell = (spans: Cell, key: string) => (
-    <Text key={key} wrap="truncate-end">
-      {spans.map((sp, i) => (
-        <Text key={`${key}-${i}`} color={sp.color} dimColor={sp.dim} bold={sp.bold}>
-          {sp.text}
-        </Text>
-      ))}
-    </Text>
-  )
+  const chips = statusChips(data, now, chipBarWidth(total), accent)
+  const isTerminal = e.surface === 'terminal'
   return (
-    <Box flexDirection="column">
-      {grid.map((row, r) => (
-        <Box key={`row-${r}`}>
-          {row.map((spans, c) => (
-            // The last section takes what is left, cut at the row's end.
-            <Box key={`sec-${r}-${c}`} width={c < row.length - 1 ? widths[c] : undefined} paddingRight={GRID_GAP}>
-              {c > 0 ? <Text dimColor>│ </Text> : null}
-              {cell(spans, `cell-${r}-${c}`)}
-            </Box>
-          ))}
+    <Box flexWrap="wrap" columnGap={isTerminal ? 2 : 1}>
+      {chips.map((spans, c) => (
+        <Box key={`chip-${c}`} {...(isTerminal ? {} : { borderStyle: 'round' as const, borderColor: COLORS.muted, paddingX: 1 })}>
+          <Text key={`cell-${c}`} wrap="truncate-end">
+            {spans.map((sp, i) => (
+              <Text key={`cell-${c}-${i}`} color={sp.color} dimColor={sp.dim} bold={sp.bold}>
+                {sp.text}
+              </Text>
+            ))}
+          </Text>
         </Box>
       ))}
     </Box>
   )
 }
 
+// Everything the chips read, in one go.
+async function statusInputs($: EngineInterface): Promise<[boolean, StatusData | null, number, string]> {
+  return Promise.all([read($, statusOn), read($, status), $.clock.now(), accentColor($)])
+}
+
 // ── compact mode ─────────────────────────────────────────────────────────────
 
 let ticker: Timer | undefined
+let terminalSeen = false // a terminal has drawn: the frame ticker has a reader
 
 function stopTicker(): void {
   ticker?.cancel()
@@ -168,13 +173,15 @@ const seconds = (ms: number): string => {
 // The Skins mod's active accent ('' while skins are off), so the loader wears the skin.
 const SKIN_ACCENT = { plugin: 'ashpack-skins', key: 'accent' } as const
 
-// The loader's color: the skin's accent, else AshPack's blue (no Skins mod, or skins off).
-// Reading it while drawing redraws the loader when the skin changes.
-async function loaderColor($: EngineInterface): Promise<string> {
+// The skin's accent, or '' with no Skins mod or skins off. Reading it while drawing
+// redraws the site when the skin changes.
+async function skinAccent($: EngineInterface): Promise<string> {
   const held = await $.state.get(SKIN_ACCENT as never).catch(() => undefined)
   const value: unknown = held?.value
-  return typeof value === 'string' && value !== '' ? value : BLUE
+  return typeof value === 'string' ? value : ''
 }
+
+
 
 // The running section's loader: redrawn per frame on the terminal; an SVG that
 // animates itself elsewhere, so the desktop never redraws for it.
@@ -453,7 +460,9 @@ export const register: Register = on => {
     // A finished task list is the last turn's; a new one starts empty.
     await update($, plan, p => (p.every(s => s.status === 'completed') ? [] : p))
     stopTicker()
-    ticker = $.clock.every(FRAME_MS, () => void update($, frame, n => (n + 1) % 100_000))
+    // Only the terminal reads `frame`; the desktop's loader animates itself, and a tick
+    // there would only redraw the transcript.
+    if (terminalSeen) ticker = $.clock.every(FRAME_MS, () => void update($, frame, n => (n + 1) % 100_000))
     return next(e)
   })
 
@@ -475,6 +484,8 @@ export const register: Register = on => {
   on('classic.UserPromptSubmit', ($, e, next) => (see(e), refreshStatus($), next(e))).catch(($, e, next) => next(e))
   on('classic.PostToolUse', ($, e, next) => (see(e), next(e))).catch(($, e, next) => next(e))
   on('classic.Stop', ($, e, next) => (see(e), refreshStatus($), next(e))).catch(($, e, next) => next(e))
+  // /model, the picker or a fallback: the model chip follows at once, not at the next tick.
+  on('classic.PostModelSwitch', ($, e, next) => (refreshStatus($), next(e))).catch(($, e, next) => next(e))
 
   // ── compact mode: what the popup says, and the task list it splits into sections ──
   on('tool.call', async ($, e, next) => {
@@ -526,23 +537,15 @@ export const register: Register = on => {
   on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => {
     const below = await next(e)
     if (e.props.hasSurvey) return below
-    const [isOn, data, isCompactOn, a, now] = await Promise.all([
-      read($, statusOn),
-      read($, status),
-      isCompact($),
-      read($, activity),
-      $.clock.now(),
-    ])
+    if (e.surface === 'terminal') terminalSeen = true
+    const [[isOn, data, now, accent], isCompactOn, a] = await Promise.all([statusInputs($), isCompact($), read($, activity)])
     const showPopup = isCompactOn && e.props.isWorking
-    const showStatus = isOn && data !== null && !isUnderPrompt(e)
+    const showStatus = isOn && data !== null && !isUnderPrompt(e) && !isInFooter(e)
     if (!showPopup && !showStatus) return below
 
-    const { Box, Text } = $.ui.resolve(e)
-    const cols = e.props.bodyColumns
-
+    const { Box } = $.ui.resolve(e)
     const popup = showPopup ? await drawPopup($, e, a, now) : null
-
-    const rows = showStatus && data ? drawGrid($, e, data, now, cols) : null
+    const rows = showStatus && data ? drawChips($, e, data, now, e.props.bodyColumns, accent) : null
 
     return (
       <Box flexDirection="column">
@@ -557,14 +560,14 @@ export const register: Register = on => {
   on('ui.render', { component: 'PromptHint' }, async ($, e, next) => {
     const below = await next(e)
     if (!isUnderPrompt(e)) return below
-    const [isOn, data, now] = await Promise.all([read($, statusOn), read($, status), $.clock.now()])
+    const [isOn, data, now, accent] = await statusInputs($)
     if (!isOn || data === null) return below
     const { Box } = $.ui.resolve(e)
     // Leave the right of the footer to the mode labels and the drawer.
     const total = Math.max(60, Math.min(150, (e.viewport?.columns ?? 120) - 34))
     return (
       <Box flexDirection="column">
-        {drawGrid($, e, data, now, total)}
+        {drawChips($, e, data, now, total, accent)}
         {below}
       </Box>
     )
@@ -573,11 +576,13 @@ export const register: Register = on => {
   // ── footer: the mods that draw here (those without a drawer page), then "◆ AshPack" ──
   on('ui.render', { component: 'SessionMode' }, async ($, e, next) => {
     const below = await next(e)
-    const isOpen = await read($, drawerOpen)
+    const [isOpen, [isOn, data, now, accent]] = await Promise.all([read($, drawerOpen), statusInputs($)])
     const { Box, Button, Text } = $.ui.resolve(e)
+    const chips = isInFooter(e) && isOn && data ? drawChips($, e, data, now, e.viewport?.columns ?? 120, accent) : null
     return (
-      <Box columnGap={2}>
+      <Box columnGap={2} flexWrap="wrap" alignItems="center">
         {below}
+        {chips}
         <Box>
           <Text color={ACCENT}>◆ </Text>
           <Button key="ashpack" plain label={isOpen ? 'AshPack ◂' : 'AshPack ▸'} onPress={() => (isOpen ? closeDrawer($) : openDrawer($))} />

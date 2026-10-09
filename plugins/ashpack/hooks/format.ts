@@ -17,7 +17,7 @@ const EFFORT: Record<string, string> = { low: '◔', medium: '◑', high: '◕',
 
 // Mid-tones that read on a light and a dark background alike (3.5:1 or more on the
 // desktop app's off-white, 3.9:1 or more on #1e1e1e): a mod cannot tell which it is drawn on.
-export const COLORS = { ok: '#1a9450', warn: '#a87700', hot: '#e5484d', accent: '#8b5cf6', blue: '#2f7bf0' } as const
+export const COLORS = { ok: '#1a9450', warn: '#a87700', hot: '#e5484d', accent: '#8b5cf6', blue: '#2f7bf0', muted: '#8a8a8a' } as const
 
 // "claude-opus-5-5[1m]" -> "Opus 5.5 1M"; "opus[1m]" -> "Opus 1M"
 export const prettyModel = (id: string): string => {
@@ -51,11 +51,10 @@ export const effortLabel = (level: string): string => `${EFFORT[level] ?? '○'}
 export const levelColor = (percent: number): string =>
   percent >= 85 ? COLORS.hot : percent >= 60 ? COLORS.warn : COLORS.ok
 
-// A line bar: the filled part heavy, the rest a thin track. 42% over 8 cells -> ["━━━", "─────"].
-// Box-drawing lines join up in the terminal and in the desktop app's code font alike.
+// A segment bar: lit blocks, then empty ones. 42% over 8 cells -> ["▰▰▰", "▱▱▱▱▱"].
 export const bar = (percent: number, width: number): [string, string] => {
   const lit = Math.min(width, Math.max(0, Math.round((percent / 100) * width)))
-  return ['━'.repeat(lit), '─'.repeat(width - lit)]
+  return ['▰'.repeat(lit), '▱'.repeat(width - lit)]
 }
 
 export const money = (usd: number): string => (usd >= 100 ? `$${Math.round(usd)}` : `$${usd.toFixed(2)}`)
@@ -74,7 +73,7 @@ export const parseGit = (porcelain: string): GitInfo | null => {
   }
 }
 
-// ── the status grid: 2 rows x 3 sections, as styled spans ──
+// ── the status chips: one row of outlined pills ──
 
 export type Span = { text: string; color?: string; dim?: boolean; bold?: boolean }
 export type Cell = Span[]
@@ -94,10 +93,9 @@ const resetIn = (r: RateWindow, now: number): Span[] => {
   return Number.isNaN(at) ? [] : [{ text: ` ↻${shortDuration(at - now)}`, dim: true }]
 }
 
-// Columns:   who            where                spend
-// row 1:     model effort   ⎇ branch ●n ↑n ↓n    folder · $cost · time
-// row 2:     ctx bar        session bar ↻reset   week bar + per-model bars ↻reset
-export const statusGrid = (d: StatusData, now: number, barWidth: number): Cell[][] => {
+// Chips, in order: model · effort | ⎇ branch ●n ↑n ↓n | ctx | session ↻ | week (+ per-model) ↻ | folder · $cost · time
+// `accent` colors the model: the skin's accent when one is on, else AshPack's own.
+export const statusChips = (d: StatusData, now: number, barWidth: number, accent: string): Cell[] => {
   const session = d.rateLimits.find(r => r.kind === 'five_hour')
   const weekly = d.rateLimits.filter(r => r.kind !== 'five_hour')
   const resets = new Set(weekly.map(r => r.resetsAt))
@@ -114,33 +112,23 @@ export const statusGrid = (d: StatusData, now: number, barWidth: number): Cell[]
     { text: `${d.costUsd !== undefined ? ` · ${money(d.costUsd)}` : ''} · ${shortDuration(now - d.startedAt)}`, dim: true },
   ]
   // Weekly windows usually share one reset: say it once, at the end.
+  const lastWeekly = weekly.at(-1)
   const weeklyCell: Cell = weekly.flatMap((r, i) => [
     ...(i > 0 ? [{ text: '  ' }] : []),
     ...meter(windowLabel(r.kind), r.percentUsed, barWidth),
     ...(resets.size > 1 ? resetIn(r, now) : []),
   ])
-  const lastWeekly = weekly.at(-1)
   return [
-    [
-      [{ text: `◆ ${prettyModel(d.model)}`, color: COLORS.accent, bold: true }, ...(d.effort ? [{ text: ` ${effortLabel(d.effort)}`, color: COLORS.blue }] : [])],
-      git,
-      spend,
-    ],
-    [
-      meter('ctx', d.contextPercent ?? 0, barWidth),
-      session ? [...meter('session', session.percentUsed, barWidth), ...resetIn(session, now)] : [{ text: 'session —', dim: true }],
-      weekly.length > 0 ? [...weeklyCell, ...(resets.size === 1 && lastWeekly ? resetIn(lastWeekly, now) : [])] : [{ text: 'week —', dim: true }],
-    ],
+    [{ text: `◆ ${prettyModel(d.model)}`, color: accent, bold: true }, ...(d.effort ? [{ text: ` · ${effortLabel(d.effort)}`, color: COLORS.blue }] : [])],
+    git,
+    meter('ctx', d.contextPercent ?? 0, barWidth),
+    session ? [...meter('session', session.percentUsed, barWidth), ...resetIn(session, now)] : [{ text: 'session —', dim: true }],
+    weekly.length > 0 ? [...weeklyCell, ...(resets.size === 1 && lastWeekly ? resetIn(lastWeekly, now) : [])] : [{ text: 'week —', dim: true }],
+    spend,
   ]
 }
 
-const cellWidth = (cell: Cell): number => cell.reduce((n, sp) => n + [...sp.text].length, 0)
-
-// Each section as wide as its widest cell, plus the separator ("│ ") and `gap`: no wider.
-export const gridWidths = (grid: Cell[][], gap: number): number[] =>
-  (grid[0] ?? []).map((_, c) => Math.max(...grid.map(row => cellWidth(row[c] ?? []))) + gap + (c > 0 ? 2 : 0))
-
-export const gridBarWidth = (total: number): number => (total >= 140 ? 8 : total >= 100 ? 6 : 4)
+export const chipBarWidth = (total: number): number => (total >= 160 ? 8 : total >= 120 ? 6 : 4)
 
 // ── the loader: a row of bars that rise and fall in turn, a wave moving right ──
 

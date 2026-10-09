@@ -67,6 +67,7 @@ async function shareAccent($: EngineInterface): Promise<void> {
 
 // The terminal spinner's wave moves a step per tick while a turn runs.
 let ticker: Timer | undefined
+let terminalSeen = false // a terminal has drawn: the frame has a reader
 
 function stopTicker(): void {
   ticker?.cancel()
@@ -513,6 +514,7 @@ export const register: Register = on => {
 
   // Your prompt in the skin's colour, in a rounded outline sized to what you typed.
   on('ui.render', { component: 'UserMessage' }, async ($, e, next) => {
+    if (e.surface === 'terminal') terminalSeen = true
     const a = await active($)
     if (!a || !TYPED.has(e.props.origin.kind) || e.props.text.length > MAX_PROMPT || (await read($, memberOf(hasImages, e)))) {
       return next(e)
@@ -602,7 +604,8 @@ export const register: Register = on => {
 
   on('turn.start', async ($, e, next) => {
     stopTicker()
-    ticker = $.clock.every(FRAME_MS, () => void update($, frame, n => (n + 1) % 100_000))
+    // Only the terminal reads `frame`; a tick on the desktop would only redraw the transcript.
+    if (terminalSeen) ticker = $.clock.every(FRAME_MS, () => void update($, frame, n => (n + 1) % 100_000))
     return next(e)
   })
 
@@ -615,6 +618,7 @@ export const register: Register = on => {
   // tokens), says the skin's word and puts the wave after it; the desktop draws the wave
   // beside the step the app names.
   on('ui.render', { component: 'Spinner' }, async ($, e, next) => {
+    if (e.surface === 'terminal') terminalSeen = true
     const a = await active($)
     if (!a) return next(e)
     if (e.surface !== 'terminal') {

@@ -7,7 +7,6 @@ import {
   COLORS,
   effortLabel,
   findPages,
-  gridWidths,
   levelColor,
   parseGit,
   packMods,
@@ -15,7 +14,7 @@ import {
   popupWidth,
   prettyModel,
   segments,
-  statusGrid,
+  statusChips,
   updateTask,
   wave,
   waveSvg,
@@ -49,8 +48,8 @@ test('helpers: names, bars, colors, git, tabs, loader', () => {
   expect(windowLabel('seven_day_fable')).toBe('fable')
   expect(effortLabel('high')).toBe('◕ high')
 
-  expect(bar(42, 8)).toEqual(['━━━', '─────'])
-  expect(bar(150, 4)).toEqual(['━━━━', ''])
+  expect(bar(42, 8)).toEqual(['▰▰▰', '▱▱▱▱▱'])
+  expect(bar(150, 4)).toEqual(['▰▰▰▰', ''])
   expect(levelColor(10)).toBe(COLORS.ok)
   expect(levelColor(60)).toBe(COLORS.warn)
   expect(levelColor(90)).toBe(COLORS.hot)
@@ -60,7 +59,7 @@ test('helpers: names, bars, colors, git, tabs, loader', () => {
   expect(parseGit('')).toBeNull()
 
   const now = Date.parse('2026-10-08T10:00:00Z')
-  const grid = statusGrid(
+  const chips = statusChips(
     {
       model: 'claude-opus-5-5[1m]',
       effort: 'high',
@@ -77,14 +76,17 @@ test('helpers: names, bars, colors, git, tabs, loader', () => {
     },
     now,
     4,
+    '#fab387',
   )
-  const texts = grid.map(row => row.map(cell => cell.map(sp => sp.text).join('')))
-  expect(texts).toEqual([
-    ['◆ Opus 5.5 1M ◕ high', '⎇ main', 'ashpack · $1.24 · 23m'],
-    ['ctx ━━── 42%', 'session ━─── 23% ↻2h14m', 'week ━━── 41%  fable ──── 12% ↻3d4h'],
+  expect(chips.map(cell => cell.map(sp => sp.text).join(''))).toEqual([
+    '◆ Opus 5.5 1M · ◕ high',
+    '⎇ main',
+    'ctx ▰▰▱▱ 42%',
+    'session ▰▱▱▱ 23% ↻2h14m',
+    'week ▰▰▱▱ 41%  fable ▱▱▱▱ 12% ↻3d4h',
+    'ashpack · $1.24 · 23m',
   ])
-  // Each section as wide as its widest cell + separator + gap.
-  expect(gridWidths(grid, 2)).toEqual([22, 27, 39])
+  expect(chips[0]?.[0]?.color).toBe('#fab387') // the model wears the skin's accent
 
   // Sections: the phases with no task list, else the list itself.
   // No task list: the latest finished steps, then the running one.
@@ -178,6 +180,7 @@ test('the drawer\'s Home page toggles compact mode and status rows; compact mode
 
 test('the footer opens the drawer: a side pane with a page per mod that draws one, and Mods', async ($, on) => {
   mock.store(on)
+  mock.clock(on, { now: Date.parse('2026-10-08T10:00:00Z') })
   mock.env(on, { HOME: '/nowhere' })
   const opened: string[] = []
   on('ui.open', ($, e) => (opened.push(e.id), { value: { isPlaced: true } }))
@@ -257,7 +260,7 @@ test('the footer opens the drawer: a side pane with a page per mod that draws on
   await pane.unmount()
 })
 
-test('the status rows draw model, branch, context and usage bars above the prompt', async ($, on) => {
+test('the status chips draw model, branch, context and usage: above the prompt on the terminal, in the footer on the desktop', async ($, on) => {
   mock.store(on)
   const clock = mock.clock(on, { now: Date.parse('2026-10-08T10:00:00Z') })
   on('settings.read', () => ({ value: { effortLevel: 'high', permissions: { defaultMode: 'auto' } } }))
@@ -289,6 +292,10 @@ test('the status rows draw model, branch, context and usage bars above the promp
     const { Text } = $.ui.resolve(e)
     return <Text dimColor>{e.props.hint}</Text>
   })
+  on('ui.render', { component: 'SessionMode' }, ($, e) => {
+    const { Text } = $.ui.resolve(e)
+    return <Text>mode</Text>
+  })
 
   await $.session.start({ source: 'startup', cwd: '/Users/ashish/Documents/Code/Mods/ashpack' } as never)
   await clock.advance(0) // refreshStatus runs unawaited
@@ -300,11 +307,18 @@ test('the status rows draw model, branch, context and usage bars above the promp
       viewport: MAIN,
       props: { hasSurvey: false, isWorking: false, maxRows: 10, bodyColumns: 140, scroll: { offset: 0, bodyRows: 10, contentRows: 0 }, view: {} } as never,
     })
-    const text = flatten(await band.drawn())
+    // The terminal's main screen: the chips in the band. The desktop: in the footer, as
+    // outlined pills; its band is left to the working popup.
+    const footer = await $.ui.mount({ plugin: 'ashpack', surface, component: 'SessionMode', viewport: MAIN, props: { modes: [] } })
+    const site = surface === 'terminal' ? band : footer
+    const text = flatten(await site.drawn())
     for (const part of ['Opus 5.5 1M', '◕ high', '⎇ main', '●1', '↑1', 'ashpack', '$1.24', 'ctx', '42%', 'session', '23%', '↻2h14m', 'fable', '91%']) {
       expect(text).toContain(part)
     }
+    expect(flatten(await (surface === 'terminal' ? footer : band).drawn())).not.toContain('Opus')
+    if (surface !== 'terminal') expect(JSON.stringify(await footer.drawn())).toContain('"borderStyle":"round"')
     await band.unmount()
+    await footer.unmount()
 
     // The fullscreen terminal: the grid sits under the prompt, above the engine's hint line.
     // The desktop reports fullscreen too, but draws nothing of a mod's under its prompt: the grid stays above.
@@ -329,8 +343,7 @@ test('the status rows draw model, branch, context and usage bars above the promp
       viewport: FULL,
       props: { hasSurvey: false, isWorking: false, maxRows: 10, bodyColumns: 140, scroll: { offset: 0, bodyRows: 10, contentRows: 0 }, view: {} } as never,
     })
-    if (surface === 'terminal') expect(flatten(await fullBand.drawn())).not.toContain('Opus')
-    else expect(flatten(await fullBand.drawn())).toContain('Opus 5.5 1M')
+    expect(flatten(await fullBand.drawn())).not.toContain('Opus')
     await fullBand.unmount()
   }
 })
