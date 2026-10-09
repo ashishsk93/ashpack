@@ -15,7 +15,9 @@ const WINDOWS: Record<string, string> = { five_hour: 'session', seven_day: 'week
 
 const EFFORT: Record<string, string> = { low: '◔', medium: '◑', high: '◕', xhigh: '●', max: '●' }
 
-export const COLORS = { ok: '#c3e88d', warn: '#ffcb6b', hot: '#f07178', accent: '#c792ea', blue: '#82aaff' } as const
+// Mid-tones that read on a light and a dark background alike (3.5:1 or more on the
+// desktop app's off-white, 3.9:1 or more on #1e1e1e): a mod cannot tell which it is drawn on.
+export const COLORS = { ok: '#1a9450', warn: '#a87700', hot: '#e5484d', accent: '#8b5cf6', blue: '#2f7bf0' } as const
 
 // "claude-opus-5-5[1m]" -> "Opus 5.5 1M"; "opus[1m]" -> "Opus 1M"
 export const prettyModel = (id: string): string => {
@@ -49,10 +51,11 @@ export const effortLabel = (level: string): string => `${EFFORT[level] ?? '○'}
 export const levelColor = (percent: number): string =>
   percent >= 85 ? COLORS.hot : percent >= 60 ? COLORS.warn : COLORS.ok
 
-// A filled bar: 42% over 8 cells -> "▰▰▰▱▱▱▱▱"
-export const bar = (percent: number, width: number): string => {
+// A line bar: the filled part heavy, the rest a thin track. 42% over 8 cells -> ["━━━", "─────"].
+// Box-drawing lines join up in the terminal and in the desktop app's code font alike.
+export const bar = (percent: number, width: number): [string, string] => {
   const lit = Math.min(width, Math.max(0, Math.round((percent / 100) * width)))
-  return '▰'.repeat(lit) + '▱'.repeat(width - lit)
+  return ['━'.repeat(lit), '─'.repeat(width - lit)]
 }
 
 export const money = (usd: number): string => (usd >= 100 ? `$${Math.round(usd)}` : `$${usd.toFixed(2)}`)
@@ -76,10 +79,15 @@ export const parseGit = (porcelain: string): GitInfo | null => {
 export type Span = { text: string; color?: string; dim?: boolean; bold?: boolean }
 export type Cell = Span[]
 
-const meter = (label: string, percent: number, width: number): Cell => [
-  { text: `${label} `, dim: true },
-  { text: `${bar(percent, width)} ${Math.round(percent)}%`, color: levelColor(percent) },
-]
+const meter = (label: string, percent: number, width: number): Cell => {
+  const [lit, track] = bar(percent, width)
+  return [
+    { text: `${label} `, dim: true },
+    { text: lit, color: levelColor(percent) },
+    { text: track, dim: true },
+    { text: ` ${Math.round(percent)}%`, color: levelColor(percent) },
+  ]
+}
 
 const resetIn = (r: RateWindow, now: number): Span[] => {
   const at = r.resetsAt ? Date.parse(r.resetsAt) : NaN
@@ -134,36 +142,31 @@ export const gridWidths = (grid: Cell[][], gap: number): number[] =>
 
 export const gridBarWidth = (total: number): number => (total >= 140 ? 8 : total >= 100 ? 6 : 4)
 
-// ── the loader: a dotted track crossed left to right by a block with a fading trail ──
+// ── the loader: a short pill sliding along a thin track, the bars' own line style ──
 
-const SPRITE = '░▒▓██'
+const PILL = '╺━━━━╸'
 
-// The terminal's loader at `frame`: `width` cells, `·` wherever the block is not.
+// The terminal's loader at `frame`: `width` cells, the track `─` wherever the pill is not.
 export const scanner = (frame: number, width: number): string => {
-  const at = (frame % (width + SPRITE.length)) - SPRITE.length + 1 // the sprite's first cell
-  return Array.from({ length: width }, (_, i) => SPRITE[i - at] ?? '·').join('')
+  const at = (frame % (width + PILL.length)) - PILL.length + 1 // the pill's first cell
+  return Array.from({ length: width }, (_, i) => PILL[i - at] ?? '─').join('')
 }
 
-const DOT = 4 // px between the desktop loader's dots
-const STEP_S = 0.07
+const LOADER_H = 8 // px
+const SWEEP_S = 1.6
 
-// The desktop's loader: the same picture as an SVG that animates itself (SMIL), a
-// grid of dots 5 high and `cols` wide, the block stepping one dot at a time.
-// The markup never changes, so a redraw does not restart it.
-export const scannerSvg = (color: string, cols: number): string => {
-  const w = cols * DOT
-  const h = 5 * DOT
-  const steps = Array.from({ length: cols + 7 }, (_, i) => `${(i - 3) * DOT} 0`)
-  const trail = [0.85, 0.55, 0.3]
-    .map((o, k) => `<rect x="${-(k + 1) * DOT}" width="${DOT * 0.7}" height="${h}" fill="url(#d)" opacity="${o}"/>`)
-    .join('')
+// The desktop's loader: the same picture as an SVG that animates itself (SMIL), a thin
+// track and a rounded pill gliding across it. The markup never changes, so a redraw does
+// not restart it. The track is a translucent grey, so it reads on a light or a dark app.
+export const scannerSvg = (color: string, width: number): string => {
+  const pill = Math.round(width / 4)
+  const y = LOADER_H / 2 - 1.5
   return (
-    `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${w} ${h}" width="${w}" height="${h}" shape-rendering="crispEdges">` +
-    `<defs><pattern id="g" width="${DOT}" height="${DOT}" patternUnits="userSpaceOnUse"><rect x="${DOT / 2 - 0.5}" y="${DOT / 2 - 0.5}" width="1" height="1" fill="${color}" opacity="0.8"/></pattern>` +
-    `<pattern id="d" width="2" height="2" patternUnits="userSpaceOnUse"><rect width="1" height="1" fill="${color}"/><rect x="1" y="1" width="1" height="1" fill="${color}"/></pattern></defs>` +
-    `<rect width="${w}" height="${h}" fill="url(#g)"/>` +
-    `<g><animateTransform attributeName="transform" type="translate" calcMode="discrete" values="${steps.join(';')}" dur="${(steps.length * STEP_S).toFixed(2)}s" repeatCount="indefinite"/>` +
-    `${trail}<rect width="${DOT * 3 - 1}" height="${h}" fill="${color}"/></g></svg>`
+    `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${width} ${LOADER_H}" width="${width}" height="${LOADER_H}">` +
+    `<rect y="${y}" width="${width}" height="3" rx="1.5" fill="#8a8a8a" opacity="0.3"/>` +
+    `<rect y="${y}" width="${pill}" height="3" rx="1.5" fill="${color}">` +
+    `<animate attributeName="x" values="${-pill};${width}" dur="${SWEEP_S}s" repeatCount="indefinite" calcMode="spline" keyTimes="0;1" keySplines="0.45 0 0.55 1"/>` +
+    `</rect></svg>`
   )
 }
 

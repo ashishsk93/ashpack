@@ -49,8 +49,8 @@ test('helpers: names, bars, colors, git, tabs, loader', () => {
   expect(windowLabel('seven_day_fable')).toBe('fable')
   expect(effortLabel('high')).toBe('◕ high')
 
-  expect(bar(42, 8)).toBe('▰▰▰▱▱▱▱▱')
-  expect(bar(150, 4)).toBe('▰▰▰▰')
+  expect(bar(42, 8)).toEqual(['━━━', '─────'])
+  expect(bar(150, 4)).toEqual(['━━━━', ''])
   expect(levelColor(10)).toBe(COLORS.ok)
   expect(levelColor(60)).toBe(COLORS.warn)
   expect(levelColor(90)).toBe(COLORS.hot)
@@ -81,7 +81,7 @@ test('helpers: names, bars, colors, git, tabs, loader', () => {
   const texts = grid.map(row => row.map(cell => cell.map(sp => sp.text).join('')))
   expect(texts).toEqual([
     ['◆ Opus 5.5 1M ◕ high', '⎇ main', 'ashpack · $1.24 · 23m'],
-    ['ctx ▰▰▱▱ 42%', 'session ▰▱▱▱ 23% ↻2h14m', 'week ▰▰▱▱ 41%  fable ▱▱▱▱ 12% ↻3d4h'],
+    ['ctx ━━── 42%', 'session ━─── 23% ↻2h14m', 'week ━━── 41%  fable ──── 12% ↻3d4h'],
   ])
   // Each section as wide as its widest cell + separator + gap.
   expect(gridWidths(grid, 2)).toEqual([22, 27, 39])
@@ -119,15 +119,15 @@ test('helpers: names, bars, colors, git, tabs, loader', () => {
   expect(findPages(tree).map(p => `${p.id}:${p.label}:${flatten(p.tree)}`)).toEqual(['baton:Baton:b', 'skins:Skins:s'])
   expect(findPages('engine text')).toEqual([])
 
-  // The block enters at the left edge, its trail behind it, and leaves at the right.
-  expect(scanner(0, 8)).toBe('█·······')
-  expect(scanner(4, 8)).toBe('░▒▓██···')
-  expect(scanner(7, 8)).toBe('···░▒▓██')
-  expect(scanner(11, 8)).toBe('·······░')
-  expect(scanner(13, 8)).toBe(scanner(0, 8))
+  // The pill enters at the left edge of the track and leaves at the right.
+  expect(scanner(0, 8)).toBe('╸───────')
+  expect(scanner(5, 8)).toBe('╺━━━━╸──')
+  expect(scanner(7, 8)).toBe('──╺━━━━╸')
+  expect(scanner(13, 8)).toBe('────────')
+  expect(scanner(14, 8)).toBe(scanner(0, 8))
   // The desktop's loader is one fixed SVG that animates itself.
-  expect(scannerSvg('#82aaff', 40)).toBe(scannerSvg('#82aaff', 40))
-  expect(scannerSvg('#82aaff', 40)).toMatch(/^<svg .*<animateTransform .*repeatCount="indefinite".*<\/svg>$/)
+  expect(scannerSvg('#2f7bf0', 160)).toBe(scannerSvg('#2f7bf0', 160))
+  expect(scannerSvg('#2f7bf0', 160)).toMatch(/^<svg .*<animate attributeName="x" .*repeatCount="indefinite".*<\/svg>$/)
 
   // The popup: half the band, never under 48 columns; at most n rows, the running one in view.
   expect(popupWidth(160)).toBe(80)
@@ -357,8 +357,8 @@ test('compact mode: a half-width popup lists the turn\'s sections as rows, the r
     expect(text).toContain('✓ Running /verify')
     expect(text).toContain('▸ Thinking…')
     // The terminal draws the loader as text per frame; the desktop as an SVG that animates itself.
-    if (surface === 'terminal') expect(text).toMatch(/·+|█/)
-    else expect(drawn).toContain('animateTransform')
+    if (surface === 'terminal') expect(text).toMatch(/─+|━/)
+    else expect(drawn).toContain('<animate ')
     await trail.unmount()
   }
 

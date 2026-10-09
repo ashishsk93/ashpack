@@ -40,7 +40,7 @@ const STATUS_TICK_MS = 30_000
 const FRAME_MS = 120
 const GRID_GAP = 2 // columns between a status section's text and the next "│"
 const POPUP_ROWS = 5 // sections the working popup shows at most
-const LOADER_DOTS = 40 // the desktop loader's width, in dots
+const LOADER_PX = 160 // the desktop loader's width, in CSS pixels
 const ACCENT = COLORS.accent
 const BLUE = COLORS.blue
 const PACK = 'ashpack' // the marketplace the pack's mods come from
@@ -169,14 +169,14 @@ const seconds = (ms: number): string => {
 function loader($: EngineInterface, e: RenderInput<'AbovePrompt'>, f: number, cells: number) {
   if (e.surface !== 'terminal') {
     const { Svg } = $.ui.resolve(e)
-    return <Svg key="loader" source={scannerSvg(BLUE, LOADER_DOTS)} alt="Working" />
+    return <Svg key="loader" source={scannerSvg(BLUE, LOADER_PX)} alt="Working" />
   }
   const { Text } = $.ui.resolve(e)
-  const runs = scanner(f, cells).match(/·+|[^·]+/g) ?? []
+  const runs = scanner(f, cells).match(/─+|[^─]+/g) ?? []
   return (
     <Text key="loader">
       {runs.map((run, i) => (
-        <Text key={`run-${i}`} color={BLUE} dimColor={run.startsWith('·')}>
+        <Text key={`run-${i}`} color={run.startsWith('─') ? undefined : BLUE} dimColor={run.startsWith('─')}>
           {run}
         </Text>
       ))}
