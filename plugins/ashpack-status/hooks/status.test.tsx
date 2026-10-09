@@ -137,6 +137,10 @@ test('the Status page toggles compact mode and the chips; compact mode hides too
     const { Text } = $.ui.resolve(e)
     return <Text>engine-row</Text>
   })
+  on('ui.render', { component: 'Spinner' }, ($, e) => {
+    const { Text } = $.ui.resolve(e)
+    return <Text>engine-spinner</Text>
+  })
   // Stands in for the AshPack host's drawing under its drawer pane.
   on('ui.render', DRAWER, ($, e) => {
     const { Box } = $.ui.resolve(e)
@@ -162,6 +166,13 @@ test('the Status page toggles compact mode and the chips; compact mode hides too
     expect(hidden).not.toContain('engine-row')
     if (surface === 'terminal') expect(hidden).toContain('"display":"none"')
     else expect(hidden).not.toContain('display')
+    // The spinner too.
+    const spin = await $.ui.mount({ plugin: 'ashpack-status', surface, component: 'Spinner', props: { word: 'Baking', message: null, suffix: '…', mode: 'thinking' } })
+    const spinDrawn = JSON.stringify(await spin.drawn())
+    expect(spinDrawn).not.toContain('engine-spinner')
+    if (surface === 'terminal') expect(spinDrawn).toContain('"display":"none"')
+    else expect(spinDrawn).not.toContain('display')
+    await spin.unmount()
 
     await panel.press({ key: 'compact' })
     await panel.press({ key: 'status' })

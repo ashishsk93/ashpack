@@ -258,7 +258,7 @@ async function drawPopup($: EngineInterface, e: RenderInput<'AbovePrompt'>, a: A
 
 // A row compact mode leaves out: dropped on the terminal, empty on the desktop app (which
 // draws its own row for a `display: none` answer).
-function emptyRow($: EngineInterface, e: RenderInput<'ToolUse'> | RenderInput<'ToolResult'> | RenderInput<'ToolGroup'>) {
+function emptyRow($: EngineInterface, e: RenderInput<'ToolUse'> | RenderInput<'ToolResult'> | RenderInput<'ToolGroup'> | RenderInput<'Spinner'>) {
   const { Box } = $.ui.resolve(e)
   return e.surface === 'terminal' ? <Box display="none" /> : <Box />
 }
@@ -408,11 +408,11 @@ export const register: Register = on => {
     (await isCompact($)) ? next({ ...e, props: { ...e.props, hint: '' } }) : next(e),
   )
 
-  // The popup replaces the engine's spinner line.
+  // The popup replaces the engine's spinner line (an empty row on the desktop, which draws
+  // its own spinner for a `display: none` answer).
   on('ui.render', { component: 'Spinner' }, async ($, e, next) => {
     if (!(await isCompact($))) return next(e)
-    const { Box } = $.ui.resolve(e)
-    return <Box display="none" />
+    return emptyRow($, e)
   })
 
   // ── the band above the prompt: working popup, status rows, then other mods' band ──
