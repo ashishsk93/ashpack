@@ -47,13 +47,20 @@ Claude Code runs the plugins of the user tier in the order of `enabledPlugins` i
 
 ## ashpack-skins
 
-Twelve skins: Catppuccin, Dracula, Nord, Gruvbox, Tokyo Night, Rosé Pine, Solarized, One, Everforest, GitHub, Kanagawa and Monokai. A skin changes text colors only, with no backgrounds and no added icons: your prompts, Claude's replies (headings, lists, inline code and links), the tool rows, the spinner's words and the turn footer. It also draws cards, each an outline with no fill:
+Twelve skins: Catppuccin, Dracula, Nord, Gruvbox, Tokyo Night, Rosé Pine, Solarized, One, Everforest, GitHub, Kanagawa and Monokai. A skin recolors your prompts, Claude's replies (headings, lists, inline code and links), the spinner and the turn footer, and draws the way [hellosverre/claude-skins](https://github.com/hellosverre/claude-skins) does. Its renderers (MIT) are vendored in `plugins/ashpack-skins/hooks/ref`, fed with these twelve palettes:
 
-- **Code** and **tables** in Claude's replies. In the desktop app their rows rise in one after another, and a **Copy** button sits under each card.
-- **Edits** as a diff card: the file, `+added −removed`, and the changed lines.
-- **Shell output** as a terminal card: `$ command`, its output (stderr in red, a long run folded to its head and tail) and how it ended (ok, failed, interrupted, timed out).
+| Site | Desktop app | Terminal |
+| --- | --- | --- |
+| Tool calls | A row with a line icon for its kind (a spinning ring while it runs), the tool, its target, lines changed and time taken | A plain row: the tool and its target |
+| Runs of calls | One row, for example `Run 2 · Read 3`, beside an icon | Claude Code's own |
+| Edits | A diff card: the file, `+N −M`, the changed lines in green and red | Claude Code's own diff |
+| Shell commands | A terminal card: status, output with stderr apart, long output folded, a Copy button | Claude Code's own output |
+| Tables in replies | A card whose rows rise in, with a Copy button | A cell grid with a header band |
+| Code in replies | A card with the language, line numbers and highlighting, and a Copy button | Claude Code's highlighting, and a Copy button |
+| Spinner | An animated icon for what the turn is doing, beside the step the app names | The skin's word |
+| Your prompts | A rounded outline sized to what you typed | The same |
 
-The desktop app draws tool calls itself and may not ask for the edit and shell cards; the terminal always shows them. The stored conversation, and what the model reads, do not change.
+Cards have no background of their own and honour reduced motion. The stored conversation, and what the model reads, do not change.
 
 The picker is the **Skins** page of the AshPack drawer: run `/skin`, or open the drawer and click **Skins**. Without AshPack, `/skin` opens it in a panel of its own. Click a card (in the desktop app, the skin's name above the card) or press its key to apply it. Two switches sit above the cards:
 

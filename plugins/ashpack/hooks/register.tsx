@@ -486,20 +486,22 @@ export const register: Register = on => {
   }).catch(($, e, next) => next(e))
 
   // ── compact mode: hidden rows (an invisible Box); ctrl+o still shows all ──
+  // The desktop app draws its own tool rows and ignores a hidden one, so there the rows
+  // pass on (to a skin that draws them) rather than stop here.
   on('ui.render', { component: 'ToolUse' }, async ($, e, next) => {
-    if (!(await isCompact($))) return next(e)
+    if (e.surface !== 'terminal' || !(await isCompact($))) return next(e)
     const { Box } = $.ui.resolve(e)
     return <Box display="none" />
   })
 
   on('ui.render', { component: 'ToolResult' }, async ($, e, next) => {
-    if (!(await isCompact($))) return next(e)
+    if (e.surface !== 'terminal' || !(await isCompact($))) return next(e)
     const { Box } = $.ui.resolve(e)
     return <Box display="none" />
   })
 
   on('ui.render', { component: 'ToolGroup' }, async ($, e, next) => {
-    if (e.props.isExpanded || !(await isCompact($))) return next(e)
+    if (e.surface !== 'terminal' || e.props.isExpanded || !(await isCompact($))) return next(e)
     const { Box } = $.ui.resolve(e)
     return <Box display="none" />
   })

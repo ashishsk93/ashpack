@@ -141,6 +141,10 @@ test('helpers: names, bars, colors, git, tabs, loader', () => {
 
 test('the drawer\'s Home page toggles compact mode and status rows; compact mode hides tool rows', async ($, on) => {
   mock.store(on)
+  on('ui.render', { component: 'ToolUse' }, ($, e) => {
+    const { Text } = $.ui.resolve(e)
+    return <Text>engine-row</Text>
+  })
   // Stands in for the engine's own drawing under the drawer pane.
   on('ui.render', DRAWER, ($, e) => {
     const { Box } = $.ui.resolve(e)
@@ -159,7 +163,8 @@ test('the drawer\'s Home page toggles compact mode and status rows; compact mode
       component: 'ToolUse',
       props: { tool_use_id: 't1', tool: 'Bash', input: { command: 'ls' }, isRunning: false, isErrored: false, isInterrupted: false },
     })
-    expect(JSON.stringify(await row.drawn())).toContain('"display":"none"')
+    // The terminal hides the row; the desktop app draws its own, so the row passes on there.
+    expect(JSON.stringify(await row.drawn())).toContain(surface === 'terminal' ? '"display":"none"' : 'engine-row')
 
     await panel.press({ key: 'compact' })
     await panel.press({ key: 'status' })
