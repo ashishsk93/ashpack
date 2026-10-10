@@ -1,4 +1,4 @@
-import type { ChipId, GitInfo, RateWindow, Section, StatusData } from '../types'
+import type { ChipId, GitInfo, PullRequest, RateWindow, RepoInfo, Section, StatusData } from '../types'
 
 // Pure helpers, kept apart from the hooks so the tests can call them directly.
 
@@ -18,6 +18,9 @@ const EFFORT: Record<string, string> = { low: '◔', medium: '◑', high: '◕',
 // Mid-tones that read on a light and a dark background alike (3.5:1 or more on the
 // desktop app's off-white, 3.9:1 or more on #1e1e1e): a mod cannot tell which it is drawn on.
 export const COLORS = { ok: '#1a9450', warn: '#a87700', hot: '#e5484d', accent: '#8b5cf6', blue: '#2f7bf0', muted: '#8a8a8a' } as const
+
+// The colours the chips and the popup draw in: AshPack's own, or the active skin's.
+export type Colors = { [K in keyof typeof COLORS]: string }
 
 // "claude-opus-5-5[1m]" -> "Opus 5.5 1M"; "opus[1m]" -> "Opus 1M"
 export const prettyModel = (id: string): string => {
@@ -48,8 +51,8 @@ export const modeLabel = (mode: string): string => MODES[mode] ?? mode
 
 export const effortLabel = (level: string): string => `${EFFORT[level] ?? '○'} ${level}`
 
-export const levelColor = (percent: number): string =>
-  percent >= 85 ? COLORS.hot : percent >= 60 ? COLORS.warn : COLORS.ok
+export const levelColor = (percent: number, c: Colors = COLORS): string =>
+  percent >= 85 ? c.hot : percent >= 60 ? c.warn : c.ok
 
 // A segment bar: lit blocks, then empty ones. 42% over 8 cells -> ["▰▰▰", "▱▱▱▱▱"].
 export const bar = (percent: number, width: number): [string, string] => {
@@ -59,24 +62,86 @@ export const bar = (percent: number, width: number): [string, string] => {
 
 export const money = (usd: number): string => (usd >= 100 ? `$${Math.round(usd)}` : `$${usd.toFixed(2)}`)
 
-// `git status --porcelain=v2 --branch` -> branch, changed files, ahead/behind.
+// `git status --porcelain=v2 --branch` -> branch, changed files, ahead/behind. A path's
+// two status letters say staged (first) and changed in the tree (second); `u` is a
+// conflict, `?` a new file.
 export const parseGit = (porcelain: string): GitInfo | null => {
   const lines = porcelain.split('\n').filter(Boolean)
   const head = lines.find(l => l.startsWith('# branch.head '))?.slice(14)
   if (!head) return null
   const ab = /^# branch\.ab \+(\d+) -(\d+)/m.exec(porcelain)
+  const paths = lines.filter(l => /^[12] /.test(l))
   return {
     branch: head === '(detached)' ? 'detached' : head,
     dirty: lines.filter(l => !l.startsWith('#')).length,
     ahead: Number(ab?.[1] ?? 0),
     behind: Number(ab?.[2] ?? 0),
+    staged: paths.filter(l => l[2] !== '.').length,
+    changed: paths.filter(l => l[3] !== '.').length,
+    untracked: lines.filter(l => l.startsWith('? ')).length,
+    conflicts: lines.filter(l => l.startsWith('u ')).length,
+  }
+}
+
+// ── the repo chips' data: pure readers of what git and gh print ──
+
+// `git diff --shortstat HEAD` -> lines added and removed; nothing printed is a clean tree.
+export const parseShortstat = (out: string): { added: number; removed: number } => ({
+  added: Number(/(\d+) insertion/.exec(out)?.[1] ?? 0),
+  removed: Number(/(\d+) deletion/.exec(out)?.[1] ?? 0),
+})
+
+// `git log -1 --format=%ct%x1f%s` -> when HEAD was committed and its subject.
+// The subject loses control bytes: a commit message is the repo's text, drawn as is.
+export const parseCommit = (out: string): { at: number; subject: string } | null => {
+  const [secs, subject = ''] = out.trim().split('\x1f')
+  const at = Number(secs) * 1000
+  return secs && Number.isFinite(at) ? { at, subject: subject.replace(/[\x00-\x1f\x7f]/g, '') } : null
+}
+
+// The operation under way, from the names in the git directory.
+const OPERATIONS: readonly [string, string][] = [
+  ['rebase-merge', 'rebasing'],
+  ['rebase-apply', 'rebasing'],
+  ['MERGE_HEAD', 'merging'],
+  ['CHERRY_PICK_HEAD', 'cherry-picking'],
+  ['REVERT_HEAD', 'reverting'],
+  ['BISECT_LOG', 'bisecting'],
+]
+export const operationOf = (names: readonly string[]): string | undefined => OPERATIONS.find(([file]) => names.includes(file))?.[1]
+
+const PASSED = new Set(['SUCCESS', 'NEUTRAL', 'SKIPPED'])
+const FAILED = new Set(['FAILURE', 'ERROR', 'TIMED_OUT', 'CANCELLED', 'ACTION_REQUIRED', 'STARTUP_FAILURE'])
+
+// `gh pr view --json number,state,isDraft,reviewDecision,statusCheckRollup` -> the PR and
+// its checks: a check run by its conclusion once completed, a status by its state.
+export const parsePr = (json: string): PullRequest | null => {
+  try {
+    const o = JSON.parse(json) as Record<string, unknown>
+    if (typeof o.number !== 'number') return null
+    const rollup = Array.isArray(o.statusCheckRollup) ? (o.statusCheckRollup as Record<string, unknown>[]) : []
+    const verdicts = rollup.map(c => String(c.conclusion || c.state || '').toUpperCase())
+    const isDone = (c: Record<string, unknown>) => c.status === undefined || c.status === 'COMPLETED'
+    return {
+      number: o.number,
+      state: String(o.state ?? 'OPEN'),
+      isDraft: o.isDraft === true,
+      review: typeof o.reviewDecision === 'string' ? o.reviewDecision : '',
+      checks: {
+        passed: rollup.filter((c, i) => isDone(c) && PASSED.has(verdicts[i] ?? '')).length,
+        failed: rollup.filter((c, i) => isDone(c) && FAILED.has(verdicts[i] ?? '')).length,
+        pending: rollup.filter((c, i) => !isDone(c) || !(PASSED.has(verdicts[i] ?? '') || FAILED.has(verdicts[i] ?? ''))).length,
+      },
+    }
+  } catch {
+    return null
   }
 }
 
 // ── the status chips: one row of outlined pills ──
 
 export type TextSpan = { text: string; color?: string; dim?: boolean; bold?: boolean }
-export type BarSpan = { bar: number; width: number } // a segment bar: percent over `width` segments
+export type BarSpan = { bar: number; width: number; color: string } // a segment bar: percent over `width` segments
 export type Span = TextSpan | BarSpan
 export type Cell = Span[]
 
@@ -85,13 +150,13 @@ export const isBar = (sp: Span): sp is BarSpan => 'bar' in sp
 // A bar as text, for the terminal and the tests: lit segments, then empty ones.
 export const barSpans = (sp: BarSpan): TextSpan[] => {
   const [lit, track] = bar(sp.bar, sp.width)
-  return [{ text: lit, color: levelColor(sp.bar) }, { text: track, dim: true }]
+  return [{ text: lit, color: sp.color }, { text: track, dim: true }]
 }
 
-const meter = (label: string, percent: number, width: number): Cell => [
+const meter = (label: string, percent: number, width: number, c: Colors): Cell => [
   { text: `${label} `, dim: true },
-  { bar: percent, width },
-  { text: ` ${Math.round(percent)}%`, color: levelColor(percent) },
+  { bar: percent, width, color: levelColor(percent, c) },
+  { text: ` ${Math.round(percent)}%`, color: levelColor(percent, c) },
 ]
 
 const SEG_W = 7
@@ -99,9 +164,8 @@ const SEG_GAP = 3
 const SEG_H = 7
 
 // The desktop's bar: the segments as an image, so they line up whatever the font does.
-export const barSvg = (percent: number, width: number): string => {
+export const barSvg = (percent: number, width: number, color = levelColor(percent)): string => {
   const lit = Math.min(width, Math.max(0, Math.round((percent / 100) * width)))
-  const color = levelColor(percent)
   const w = width * (SEG_W + SEG_GAP) - SEG_GAP
   const rects = Array.from({ length: width }, (_, i) => `<rect x="${i * (SEG_W + SEG_GAP)}" width="${SEG_W}" height="${SEG_H}" rx="1.5" fill="${color}" opacity="${i < lit ? 1 : 0.25}"/>`).join('')
   return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${w} ${SEG_H}" width="${w}" height="${SEG_H}">${rects}</svg>`
@@ -115,16 +179,30 @@ const resetIn = (r: RateWindow, now: number): Span[] => {
 }
 
 // The chips the Status page lists, in their order, with a sample of what each shows.
-export const CHIPS: readonly { id: ChipId; label: string; sample: string }[] = [
+// `isExtra` chips start off: the repo's state, for those who want more of it.
+export const CHIPS: readonly { id: ChipId; label: string; sample: string; isExtra?: boolean }[] = [
   { id: 'model', label: 'Model and effort', sample: '◆ Opus 5.5 · ◕ high' },
   { id: 'branch', label: 'Branch', sample: '⎇ main ●2 ↑1' },
   { id: 'context', label: 'Context', sample: 'ctx 42%' },
   { id: 'session', label: 'Session limit', sample: 'session 23% ↻2h14m' },
   { id: 'week', label: 'Weekly limits', sample: 'week 41%' },
   { id: 'spend', label: 'Folder, cost and time', sample: 'ashpack · $1.24 · 23m' },
+  { id: 'tree', label: 'Working tree', sample: 'rebasing · 2 staged · 3 changed · 1 new · 1 stash', isExtra: true },
+  { id: 'lines', label: 'Lines changed', sample: 'diff +120 −34', isExtra: true },
+  { id: 'commit', label: 'Last commit', sample: 'commit 2h ago · fix: login redirect', isExtra: true },
+  { id: 'pr', label: 'Pull request and checks', sample: 'PR #12 ✓ 5 checks · approved', isExtra: true },
 ]
 
 export const CHIP_IDS: readonly ChipId[] = CHIPS.map(c => c.id)
+const EXTRA_IDS: readonly ChipId[] = CHIPS.filter(c => c.isExtra).map(c => c.id)
+
+// The hidden chips at the start of a session: the stored pick, plus every extra chip the
+// stored order has not listed yet (new to this person, so it starts off).
+export const hiddenChipsOf = (storedHidden: unknown, storedOrder: unknown): ChipId[] => {
+  const seen: unknown[] = Array.isArray(storedOrder) ? storedOrder : []
+  const hidden = chipIds(storedHidden)
+  return CHIP_IDS.filter(id => hidden.includes(id) || (EXTRA_IDS.includes(id) && !seen.includes(id)))
+}
 
 // A stored list of hidden chips, kept to the ids above: $.store may hold anything.
 export const chipIds = (stored: unknown): ChipId[] => (Array.isArray(stored) ? CHIP_IDS.filter(id => stored.includes(id)) : [])
@@ -145,20 +223,87 @@ export const moveChip = (order: readonly ChipId[], id: ChipId, by: -1 | 1, liste
   return other ? order.map(x => (x === id ? other : x === other ? id : x)) : [...order]
 }
 
-// Chips, in order: model · effort | ⎇ branch ●n ↑n ↓n | ctx | session ↻ | week (+ per-model) ↻ | folder · $cost · time
-// `accent` colors the model: the skin's accent when one is on, else AshPack's own. With
+const plural = (n: number, one: string, many = `${one}s`): string => `${n} ${n === 1 ? one : many}`
+
+// The working tree: an operation under way first, then what is staged, changed, new, in conflict, stashed.
+const treeCell = (git: GitInfo | null, repo: RepoInfo, c: Colors): Cell => {
+  if (!git) return [{ text: 'no repo', dim: true }]
+  const parts: TextSpan[] = [
+    ...(git.staged > 0 ? [{ text: `${git.staged} staged`, color: c.ok }] : []),
+    ...(git.changed > 0 ? [{ text: `${git.changed} changed`, color: c.warn }] : []),
+    ...(git.untracked > 0 ? [{ text: `${git.untracked} new`, color: c.blue }] : []),
+    ...(git.conflicts > 0 ? [{ text: plural(git.conflicts, 'conflict'), color: c.hot, bold: true }] : []),
+    ...(repo.stashes ? [{ text: plural(repo.stashes, 'stash', 'stashes'), dim: true }] : []),
+  ]
+  const op: TextSpan[] = repo.operation ? [{ text: repo.operation, color: c.hot, bold: true }] : []
+  const all = [...op, ...(parts.length > 0 || op.length > 0 ? parts : [{ text: 'clean', color: c.ok }])]
+  return all.flatMap((sp, i) => (i > 0 ? [{ text: ' · ', dim: true }, sp] : [sp]))
+}
+
+const linesCell = (repo: RepoInfo, c: Colors): Cell =>
+  repo.lines
+    ? [
+        { text: 'diff ', dim: true },
+        { text: `+${repo.lines.added}`, color: repo.lines.added > 0 ? c.ok : undefined, dim: repo.lines.added === 0 },
+        { text: ` −${repo.lines.removed}`, color: repo.lines.removed > 0 ? c.hot : undefined, dim: repo.lines.removed === 0 },
+      ]
+    : [{ text: 'diff —', dim: true }]
+
+const SUBJECT = 40 // a commit subject's room in its chip
+
+const commitCell = (repo: RepoInfo, now: number, c: Colors): Cell => {
+  if (!repo.commit) return [{ text: repo.commit === null ? 'no commits yet' : 'commit —', dim: true }]
+  const { at, subject } = repo.commit
+  const clipped = [...subject].length > SUBJECT ? `${[...subject].slice(0, SUBJECT - 1).join('')}…` : subject
+  return [
+    { text: 'commit ', dim: true },
+    { text: `${shortDuration(now - at)} ago`, color: c.blue },
+    { text: ` · ${clipped}` },
+  ]
+}
+
+// The PR: its number, then where it stands. An open one says its checks (failing first) and its review.
+const prCell = (repo: RepoInfo, c: Colors): Cell => {
+  const pr = repo.pr
+  if (!pr) return [{ text: pr === null ? 'no PR' : 'PR —', dim: true }] // undefined: not asked yet
+  const head: TextSpan = { text: `PR #${pr.number}`, color: c.accent, bold: true }
+  if (pr.state === 'MERGED') return [head, { text: ' merged', color: c.accent }]
+  if (pr.state === 'CLOSED') return [head, { text: ' closed', dim: true }]
+  const { passed, failed, pending } = pr.checks
+  const checks: TextSpan[] =
+    failed > 0
+      ? [{ text: ` ✗ ${failed} failing`, color: c.hot }]
+      : pending > 0
+        ? [{ text: ` ● ${pending} running`, color: c.warn }]
+        : passed > 0
+          ? [{ text: ` ✓ ${plural(passed, 'check')}`, color: c.ok }]
+          : []
+  const REVIEWS: Record<string, TextSpan> = {
+    APPROVED: { text: ' · approved', color: c.ok },
+    CHANGES_REQUESTED: { text: ' · changes asked', color: c.hot },
+    REVIEW_REQUIRED: { text: ' · needs review', dim: true },
+  }
+  const review = REVIEWS[pr.review]
+  return [head, ...(pr.isDraft ? [{ text: ' draft', dim: true }] : []), ...checks, ...(review ? [review] : [])]
+}
+
+export type Chip = { id: ChipId; cell: Cell }
+
+// Chips, in order: model · effort | ⎇ branch ●n ↑n ↓n | ctx | session ↻ | week (+ per-model) ↻ | folder · $cost · time,
+// then the extra repo chips: working tree | diff | last commit | PR.
+// `c` colours them: the skin's palette when one is on, else AshPack's own. With
 // `hasModel` false the model chip is left out (the desktop app names the model and effort
 // in its own footer); `shown` lists the chips to draw, in order, as the Status page set them.
-export const statusChips = (d: StatusData, now: number, barWidth: number, accent: string, hasModel = true, shown: readonly ChipId[] = CHIP_IDS): Cell[] => {
+export const statusChips = (d: StatusData, now: number, barWidth: number, c: Colors = COLORS, hasModel = true, shown: readonly ChipId[] = CHIP_IDS): Chip[] => {
   const session = d.rateLimits.find(r => r.kind === 'five_hour')
   const weekly = d.rateLimits.filter(r => r.kind !== 'five_hour')
   const resets = new Set(weekly.map(r => r.resetsAt))
   const git: Cell = d.git
     ? [
-        { text: `⎇ ${d.git.branch}`, color: COLORS.ok },
-        ...(d.git.dirty > 0 ? [{ text: ` ●${d.git.dirty}`, color: COLORS.warn }] : []),
-        ...(d.git.ahead > 0 ? [{ text: ` ↑${d.git.ahead}`, color: COLORS.blue }] : []),
-        ...(d.git.behind > 0 ? [{ text: ` ↓${d.git.behind}`, color: COLORS.hot }] : []),
+        { text: `⎇ ${d.git.branch}`, color: c.ok },
+        ...(d.git.dirty > 0 ? [{ text: ` ●${d.git.dirty}`, color: c.warn }] : []),
+        ...(d.git.ahead > 0 ? [{ text: ` ↑${d.git.ahead}`, color: c.blue }] : []),
+        ...(d.git.behind > 0 ? [{ text: ` ↓${d.git.behind}`, color: c.hot }] : []),
       ]
     : [{ text: '⎇ no repo', dim: true }]
   const spend: Cell = [
@@ -169,19 +314,23 @@ export const statusChips = (d: StatusData, now: number, barWidth: number, accent
   const lastWeekly = weekly.at(-1)
   const weeklyCell: Cell = weekly.flatMap((r, i) => [
     ...(i > 0 ? [{ text: '  ' }] : []),
-    ...meter(windowLabel(r.kind), r.percentUsed, barWidth),
+    ...meter(windowLabel(r.kind), r.percentUsed, barWidth, c),
     ...(resets.size > 1 ? resetIn(r, now) : []),
   ])
-  const model: Cell = [{ text: `◆ ${prettyModel(d.model)}`, color: accent, bold: true }, ...(d.effort ? [{ text: ` · ${effortLabel(d.effort)}`, color: COLORS.blue }] : [])]
+  const model: Cell = [{ text: `◆ ${prettyModel(d.model)}`, color: c.accent, bold: true }, ...(d.effort ? [{ text: ` · ${effortLabel(d.effort)}`, color: c.blue }] : [])]
   const cells: Record<ChipId, Cell> = {
     model,
     branch: git,
-    context: meter('ctx', d.contextPercent ?? 0, barWidth),
-    session: session ? [...meter('session', session.percentUsed, barWidth), ...resetIn(session, now)] : [{ text: 'session —', dim: true }],
+    context: meter('ctx', d.contextPercent ?? 0, barWidth, c),
+    session: session ? [...meter('session', session.percentUsed, barWidth, c), ...resetIn(session, now)] : [{ text: 'session —', dim: true }],
     week: weekly.length > 0 ? [...weeklyCell, ...(resets.size === 1 && lastWeekly ? resetIn(lastWeekly, now) : [])] : [{ text: 'week —', dim: true }],
     spend,
+    tree: treeCell(d.git, d.repo, c),
+    lines: linesCell(d.repo, c),
+    commit: commitCell(d.repo, now, c),
+    pr: prCell(d.repo, c),
   }
-  return shown.filter(id => hasModel || id !== 'model').map(id => cells[id])
+  return shown.filter(id => hasModel || id !== 'model').map(id => ({ id, cell: cells[id] }))
 }
 
 export const chipBarWidth = (total: number): number => (total >= 160 ? 8 : total >= 120 ? 6 : 4)

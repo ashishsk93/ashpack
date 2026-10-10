@@ -1,8 +1,8 @@
 import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register, RenderInput, Timer } from 'claude-code'
 
-import type { Activity, ChipId, Section, StatusData } from '../types'
-import type { Segment, Span, TextSpan } from './format'
+import type { Activity, ChipId, GitInfo, PullRequest, RepoInfo, Section, StatusData } from '../types'
+import type { Colors, Segment, TextSpan } from './format'
 import {
   addTask,
   around,
@@ -13,12 +13,16 @@ import {
   barSvg,
   chipBarWidth,
   CHIP_IDS,
-  chipIds,
   chipOrder,
   CHIPS,
+  hiddenChipsOf,
   moveChip,
   isBar,
+  operationOf,
+  parseCommit,
   parseGit,
+  parsePr,
+  parseShortstat,
   planFromTodos,
   popupWidth,
   segments,
@@ -41,20 +45,25 @@ const PANE = 'ashpack-status' // the mod's own pane, for sessions without the ho
 const HOST = 'ashpack@ashpack'
 const PANE_COLUMNS = 64
 const STATUS_TICK_MS = 30_000
+const PR_TTL_MS = 120_000 // the PR chip asks GitHub at most this often
+const GIT_MS = 3000
+// Polling takes no optional lock, so it never holds `index.lock` against Claude's own git calls.
+const GIT = ['git', '--no-optional-locks'] as const
+const GH_MS = 10_000
 const FRAME_MS = 120
 const POPUP_ROWS = 5 // sections the working popup shows at most
 const LOADER_PX = 120 // the desktop loader's width, in CSS pixels
 const LOADER_CELLS = 12 // the terminal loader's width at most
-const ACCENT = COLORS.accent
 const BLUE = COLORS.blue
 const COMPACT_KEY = 'compact' // $.store keys: toggles survive sessions
 const STATUS_KEY = 'statusOn'
 const CHIPS_KEY = 'hiddenChips'
 const ORDER_KEY = 'chipOrder'
 
-// The loader and the model chip wear the skin's accent when one is on.
-const loaderColor = async ($: EngineInterface): Promise<string> => (await skinAccent($)) || BLUE
-const accentColor = async ($: EngineInterface): Promise<string> => (await skinAccent($)) || ACCENT
+// The chips and the popup draw in the skin's palette when one is on; the loader in its
+// accent, else AshPack's blue.
+const loaderColor = async ($: EngineInterface): Promise<string> => (await skinColors($))?.accent ?? BLUE
+const colorsOf = async ($: EngineInterface): Promise<Colors> => (await skinColors($)) ?? COLORS
 
 const compact = atom({ plugin: 'ashpack-status', key: 'compact' } as const, false)
 const statusOn = atom({ plugin: 'ashpack-status', key: 'statusOn' } as const, true)
@@ -76,12 +85,53 @@ const see = (e: { effort?: { level: string } }): void => {
   seen = { effort: e.effort?.level ?? seen.effort }
 }
 
-async function gitInfo($: EngineInterface) {
+// A command's output, or null when it failed or is not installed. In the C locale, so git's
+// words (`insertions`) read the same everywhere.
+async function run($: EngineInterface, argv: readonly string[], timeoutMs = GIT_MS): Promise<string | null> {
   try {
-    const { exitCode, stdout } = await $.process.run(['git', 'status', '--porcelain=v2', '--branch'], { timeoutMs: 3000 })
-    return exitCode === 0 ? parseGit(stdout) : null
+    const { exitCode, stdout } = await $.process.run(argv, { timeoutMs, env: { LC_ALL: 'C' } })
+    return exitCode === 0 ? stdout : null
   } catch {
     return null
+  }
+}
+
+async function gitInfo($: EngineInterface) {
+  const out = await run($, [...GIT, 'status', '--porcelain=v2', '--branch'])
+  return out === null ? null : parseGit(out)
+}
+
+// The last PR answer, per branch, kept as its promise so refreshes that overlap share one
+// `gh` call: GitHub is asked again only after PR_TTL_MS.
+let prSeen: { branch: string; at: number; pr: Promise<PullRequest | null> } | undefined
+
+function pullRequest($: EngineInterface, branch: string, now: number): Promise<PullRequest | null> {
+  if (prSeen?.branch === branch && now - prSeen.at < PR_TTL_MS) return prSeen.pr
+  const pr = run($, ['gh', 'pr', 'view', '--json', 'number,state,isDraft,reviewDecision,statusCheckRollup'], GH_MS).then(out => (out === null ? null : parsePr(out)))
+  prSeen = { branch, at: now, pr }
+  return pr
+}
+
+async function treeExtras($: EngineInterface): Promise<Pick<RepoInfo, 'operation' | 'stashes'>> {
+  const [dir, stash] = await Promise.all([run($, [...GIT, 'rev-parse', '--absolute-git-dir']), run($, [...GIT, 'stash', 'list'])])
+  const names = dir ? await $.fs.list(dir.trim()).then(list => list.map(f => f.name), () => []) : []
+  return { operation: operationOf(names), stashes: stash === null ? 0 : stash.split('\n').filter(Boolean).length }
+}
+
+// What the extra repo chips read, fetched only for the chips that are on.
+async function repoInfo($: EngineInterface, git: GitInfo | null, wants: readonly ChipId[], now: number): Promise<RepoInfo> {
+  if (!git) return {}
+  const [tree, diff, log, pr] = await Promise.all([
+    wants.includes('tree') ? treeExtras($) : {},
+    wants.includes('lines') ? run($, [...GIT, 'diff', '--shortstat', 'HEAD']) : null,
+    wants.includes('commit') ? run($, [...GIT, 'log', '-1', '--format=%ct%x1f%s']) : null,
+    wants.includes('pr') ? pullRequest($, git.branch, now) : undefined,
+  ])
+  return {
+    ...tree,
+    ...(diff !== null ? { lines: parseShortstat(diff) } : {}),
+    ...(wants.includes('commit') ? { commit: log === null ? null : parseCommit(log) } : {}),
+    ...(pr !== undefined ? { pr } : {}),
   }
 }
 
@@ -91,7 +141,16 @@ async function seenFromSettings($: EngineInterface): Promise<Seen> {
 }
 
 async function loadStatus($: EngineInterface): Promise<void> {
-  const [model, usage, git, cwd] = await Promise.all([$.session.model(), $.session.usage(), gitInfo($), $.session.cwd()])
+  const [model, usage, git, cwd, isOn, hidden, now] = await Promise.all([
+    $.session.model(),
+    $.session.usage(),
+    gitInfo($),
+    $.session.cwd(),
+    read($, statusOn),
+    read($, hiddenChips),
+    $.clock.now(),
+  ])
+  const held = await read($, status)
   const data: StatusData = {
     model,
     effort: seen.effort,
@@ -101,10 +160,16 @@ async function loadStatus($: EngineInterface): Promise<void> {
     folder: cwd.split('/').pop() || cwd,
     costUsd: usage.cost?.usd,
     startedAt: usage.startedAt,
+    repo: held?.repo ?? {},
   }
   // Only a change is written: every write makes the desktop app re-lay out the transcript.
-  const held = await read($, status)
   if (JSON.stringify(held) !== JSON.stringify(data)) await update($, status, () => data)
+  // The repo chips' data after, so a slow `gh` never holds up the other chips. It joins
+  // whatever the chips hold by then, so an older refresh cannot undo a newer one's.
+  const wants = isOn ? CHIP_IDS.filter(id => !hidden.includes(id)) : []
+  const repo = await repoInfo($, git, wants, now)
+  const latest = await read($, status)
+  if (latest && JSON.stringify(latest.repo) !== JSON.stringify(repo)) await update($, status, s => s && { ...s, repo })
 }
 
 // Never lets the status rows break the event they ride on.
@@ -117,11 +182,6 @@ function refreshStatus($: EngineInterface): void {
 // panes, but draws no mod tree under its prompt; its footer is a one-line strip that
 // truncates, so the chips cannot go there either. In the band, the working popup takes
 // the chips' place while Claude works, so the two never stack.
-const chipLabel = (spans: readonly Span[]): string => {
-  const first = spans.find(sp => !isBar(sp))
-  return (first && !isBar(first) ? first.text : 'status').replace(/[^a-z]/gi, '').toLowerCase() || 'status'
-}
-
 const isUnderPrompt = (e: { surface: string; viewport?: { isFullscreen?: boolean } }): boolean =>
   e.surface === 'terminal' && e.viewport?.isFullscreen === true
 
@@ -130,10 +190,10 @@ type StatusSite = RenderInput<'PromptHint'> | RenderInput<'AbovePrompt'>
 // The chips as a tree. The desktop: one strip, the bars as images (its font sets the
 // segment glyphs at odd heights), wide gaps between the chips. The terminal: a spaced
 // row of text. Both wrap when the row is short.
-function drawChips($: EngineInterface, e: StatusSite, data: StatusData, now: number, total: number, accent: string, shown: readonly ChipId[]) {
+function drawChips($: EngineInterface, e: StatusSite, data: StatusData, now: number, total: number, colors: Colors, shown: readonly ChipId[]) {
   const { Box, Text } = $.ui.resolve(e)
   const isTerminal = e.surface === 'terminal'
-  const chips = statusChips(data, now, chipBarWidth(total), accent, isTerminal, shown)
+  const chips = statusChips(data, now, chipBarWidth(total), colors, isTerminal, shown)
   // Svg is not in the terminal's table: resolved only off it.
   const Svg = e.surface === 'terminal' ? null : $.ui.resolve(e).Svg
   const text = (sp: TextSpan, key: string) => (
@@ -143,14 +203,14 @@ function drawChips($: EngineInterface, e: StatusSite, data: StatusData, now: num
   )
   return (
     <Box flexWrap="wrap" columnGap={isTerminal ? 2 : 3} rowGap={isTerminal ? 0 : 1}>
-      {chips.map((spans, c) => (
+      {chips.map(({ id, cell }, c) => (
         // Keyed for the AshPack host, which lifts each chip into its strip.
-        <Box key={`ashpack-chip:${chipLabel(spans)}`} alignItems="center">
-          {spans.map((sp, i) => {
+        <Box key={`ashpack-chip:${id}`} alignItems="center">
+          {cell.map((sp, i) => {
             const key = `cell-${c}-${i}`
             if (!isBar(sp)) return text(sp, key)
             if (isTerminal || !Svg) return <Text key={key}>{barSpans(sp).map((t, j) => text(t, `${key}-${j}`))}</Text>
-            return <Svg key={key} source={barSvg(sp.bar, sp.width)} alt={`${Math.round(sp.bar)}%`} width={barPx(sp.width)} height={7} />
+            return <Svg key={key} source={barSvg(sp.bar, sp.width, sp.color)} alt={`${Math.round(sp.bar)}%`} width={barPx(sp.width)} height={7} />
           })}
         </Box>
       ))}
@@ -159,9 +219,9 @@ function drawChips($: EngineInterface, e: StatusSite, data: StatusData, now: num
 }
 
 // Everything the chips read, in one go; the last, the chips turned on, in their order.
-async function statusInputs($: EngineInterface): Promise<[boolean, StatusData | null, number, string, ChipId[]]> {
-  const [isOn, data, now, accent, order, hidden] = await Promise.all([read($, statusOn), read($, status), $.clock.now(), accentColor($), read($, orderedChips), read($, hiddenChips)])
-  return [isOn, data, now, accent, order.filter(id => !hidden.includes(id))]
+async function statusInputs($: EngineInterface): Promise<[boolean, StatusData | null, number, Colors, ChipId[]]> {
+  const [isOn, data, now, colors, order, hidden] = await Promise.all([read($, statusOn), read($, status), $.clock.now(), colorsOf($), read($, orderedChips), read($, hiddenChips)])
+  return [isOn, data, now, colors, order.filter(id => !hidden.includes(id))]
 }
 
 // ── compact mode ─────────────────────────────────────────────────────────────
@@ -188,15 +248,24 @@ const seconds = (ms: number): string => {
   return s < 60 ? `${s}s` : `${Math.floor(s / 60)}m ${s % 60}s`
 }
 
-// The Skins mod's active accent ('' while skins are off), so the loader wears the skin.
+// The Skins mod's active palette (null while skins are off), and its accent alone, which a
+// Skins mod before 0.8 shares instead.
+const SKIN_PALETTE = { plugin: 'ashpack-skins', key: 'palette' } as const
 const SKIN_ACCENT = { plugin: 'ashpack-skins', key: 'accent' } as const
 
-// The skin's accent, or '' with no Skins mod or skins off. Reading it while drawing
+const isColors = (v: unknown): v is Colors =>
+  typeof v === 'object' && v !== null && Object.keys(COLORS).every(k => typeof (v as Record<string, unknown>)[k] === 'string')
+
+// The skin's colours, or null with no Skins mod or skins off. Reading them while drawing
 // redraws the site when the skin changes.
-async function skinAccent($: EngineInterface): Promise<string> {
-  const held = await $.state.get(SKIN_ACCENT as never).catch(() => undefined)
-  const value: unknown = held?.value
-  return typeof value === 'string' ? value : ''
+async function skinColors($: EngineInterface): Promise<Colors | null> {
+  const [palette, accent] = await Promise.all([
+    $.state.get(SKIN_PALETTE as never).catch(() => undefined),
+    $.state.get(SKIN_ACCENT as never).catch(() => undefined),
+  ])
+  if (isColors(palette?.value)) return palette.value
+  const a: unknown = accent?.value
+  return typeof a === 'string' && a !== '' ? { ...COLORS, accent: a } : null
 }
 
 
@@ -224,7 +293,7 @@ async function drawPopup($: EngineInterface, e: RenderInput<'AbovePrompt'>, a: A
   const { Box, Text } = $.ui.resolve(e)
   const isTerminal = e.surface === 'terminal'
   // Reading `frame` redraws per tick: the terminal only.
-  const [list, f, color] = await Promise.all([read($, plan), isTerminal ? read($, frame) : 0, loaderColor($)])
+  const [list, f, color, c] = await Promise.all([read($, plan), isTerminal ? read($, frame) : 0, loaderColor($), colorsOf($)])
   const width = popupWidth(e.props.bodyColumns)
   const inner = width - 4 // border and padding
   const titleWidth = Math.floor(inner * 0.55)
@@ -237,10 +306,10 @@ async function drawPopup($: EngineInterface, e: RenderInput<'AbovePrompt'>, a: A
     a && a.steps > 0 ? `${a.steps} step${a.steps === 1 ? '' : 's'}` : '',
   ].filter(Boolean)
   return (
-    <Box flexDirection="column" borderStyle="round" borderColor={ACCENT} paddingX={1} width={width}>
+    <Box flexDirection="column" borderStyle="round" borderColor={c.accent} paddingX={1} width={width}>
       <Box justifyContent="space-between" columnGap={2}>
         <Text wrap="truncate-end">
-          <Text bold color={ACCENT}>
+          <Text bold color={c.accent}>
             ◆ AshPack
           </Text>
           {/* The trail's running section names the step; a task list's sections are the tasks. */}
@@ -254,7 +323,7 @@ async function drawPopup($: EngineInterface, e: RenderInput<'AbovePrompt'>, a: A
             <Text
               wrap="truncate-end"
               bold={s.state === 'now'}
-              color={s.state === 'now' ? ACCENT : s.state === 'done' ? COLORS.ok : undefined}
+              color={s.state === 'now' ? c.accent : s.state === 'done' ? c.ok : undefined}
               dimColor={s.state === 'todo'}
             >
               {MARK[s.state]} {s.title}
@@ -352,12 +421,14 @@ async function toggle($: EngineInterface, which: 'compact' | 'statusOn'): Promis
   const isOn = !(await read($, statusOn))
   await update($, statusOn, () => isOn)
   await $.store.set(STATUS_KEY, isOn)
+  refreshStatus($) // the repo chips fetch nothing while the chips are off
   return isOn
 }
 
 async function toggleChip($: EngineInterface, id: ChipId): Promise<void> {
   await update($, hiddenChips, list => (list.includes(id) ? list.filter(x => x !== id) : [...list, id]))
   await $.store.set(CHIPS_KEY, await read($, hiddenChips))
+  refreshStatus($) // a repo chip turned on fetches its data now, not at the next tick
 }
 
 async function moveChipBy($: EngineInterface, id: ChipId, by: -1 | 1, listed: readonly ChipId[]): Promise<void> {
@@ -376,8 +447,13 @@ export const register: Register = on => {
     ])
     await update($, compact, () => storedCompact === true)
     await update($, statusOn, () => storedStatus !== false)
-    await update($, hiddenChips, () => chipIds(storedChips))
-    await update($, orderedChips, () => chipOrder(storedOrder))
+    // A chip added since the pick was stored takes its default; both are stored again so it
+    // counts as seen from now on.
+    const hidden = hiddenChipsOf(storedChips, storedOrder)
+    const order = chipOrder(storedOrder)
+    await update($, hiddenChips, () => hidden)
+    await update($, orderedChips, () => order)
+    await Promise.all([$.store.set(CHIPS_KEY, hidden), $.store.set(ORDER_KEY, order)])
     await resetActivity($)
     $.ui.status(undefined) // 0.1.0 pinned a plain-text line; the rows replace it
     await $.command.register({
@@ -472,14 +548,14 @@ export const register: Register = on => {
     const below = await next(e)
     if (e.props.hasSurvey) return below
     if (e.surface === 'terminal') terminalSeen = true
-    const [[isOn, data, now, accent, shown], isCompactOn, a] = await Promise.all([statusInputs($), isCompact($), read($, activity)])
+    const [[isOn, data, now, colors, shown], isCompactOn, a] = await Promise.all([statusInputs($), isCompact($), read($, activity)])
     const showPopup = isCompactOn && e.props.isWorking
     const showStatus = isOn && data !== null && !isUnderPrompt(e) && !showPopup
     if (!showPopup && !showStatus) return below
 
     const { Box } = $.ui.resolve(e)
     const popup = showPopup ? await drawPopup($, e, a, now) : null
-    const rows = showStatus && data ? drawChips($, e, data, now, e.props.bodyColumns, accent, shown) : null
+    const rows = showStatus && data ? drawChips($, e, data, now, e.props.bodyColumns, colors, shown) : null
 
     return (
       <Box flexDirection="column">
@@ -494,14 +570,14 @@ export const register: Register = on => {
   on('ui.render', { component: 'PromptHint' }, async ($, e, next) => {
     const below = await next(e)
     if (!isUnderPrompt(e)) return below
-    const [isOn, data, now, accent, shown] = await statusInputs($)
+    const [isOn, data, now, colors, shown] = await statusInputs($)
     if (!isOn || data === null) return below
     const { Box } = $.ui.resolve(e)
     // Leave the right of the footer to the mode labels and the drawer.
     const total = Math.max(60, Math.min(150, (e.viewport?.columns ?? 120) - 34))
     return (
       <Box flexDirection="column">
-        {drawChips($, e, data, now, total, accent, shown)}
+        {drawChips($, e, data, now, total, colors, shown)}
         {below}
       </Box>
     )

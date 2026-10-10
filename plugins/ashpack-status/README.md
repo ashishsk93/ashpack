@@ -21,7 +21,20 @@ One row:
 
 Bars are green below 60%, amber below 85%, red from 85%. The chips refresh on a timer, on each prompt and turn, and when the model changes.
 
-Where they sit: under the prompt in a fullscreen terminal; above it elsewhere, in the AshPack strip (a row of their own without the host). The desktop app draws the bars as images, so the segments line up whatever its font does, and leaves out the model chip, since its own footer names the model. With a skin on, the model chip takes the skin's accent.
+### Repo chips (off until you turn them on)
+
+Four more chips show what is going on in the repo. Turn each on in the Status page.
+
+| Chip | Shows | From |
+| --- | --- | --- |
+| Working tree | `rebasing · 2 staged · 3 changed · 1 new · 1 conflict · 1 stash`, or `clean` | `git status`, the git directory, `git stash list` |
+| Lines changed | `diff +120 −34`: the tree against `HEAD` (new files not counted) | `git diff --shortstat HEAD` |
+| Last commit | `commit 2h ago · fix: login redirect` | `git log -1` |
+| Pull request and checks | `PR #12 ✓ 5 checks · approved`; failing checks, running checks, draft, merged, changes asked | `gh pr view`, at most every 2 minutes; `no PR` without `gh` or a PR |
+
+A chip that is off runs no command.
+
+Where they sit: under the prompt in a fullscreen terminal; above it elsewhere, in the AshPack strip (a row of their own without the host). The desktop app draws the bars as images, so the segments line up whatever its font does, and leaves out the model chip, since its own footer names the model. With a skin on, the chips and the working popup draw in the skin's palette: its green, amber and red for the bars and the repo, its accent for the model and the popup's outline.
 
 ## Compact mode
 
@@ -34,7 +47,7 @@ A wave loader sits beside the running row, in the skin's accent when a skin is o
 
 ## Settings
 
-The **Status** page of the drawer has the two switches. Under **Status chips**, a row per chip turns each one on or off, and its `↑` `↓` move it: model and effort, branch, context, session limit, weekly limits, and folder, cost and time (the desktop app lists no model row, since it draws no model chip). The chips show in the rows' order, and the pick is kept across sessions. `/ashstatus` opens the page, in a pane of its own without the host. `/ashstatus compact` and `/ashstatus chips` flip one.
+The **Status** page of the drawer has the two switches. Under **Status chips**, a row per chip turns each one on or off, and its `↑` `↓` move it: model and effort, branch, context, session limit, weekly limits, folder, cost and time, then the four repo chips, which start off (the desktop app lists no model row, since it draws no model chip). The chips show in the rows' order, and the pick is kept across sessions. `/ashstatus` opens the page, in a pane of its own without the host. `/ashstatus compact` and `/ashstatus chips` flip one.
 
 ## Install
 
