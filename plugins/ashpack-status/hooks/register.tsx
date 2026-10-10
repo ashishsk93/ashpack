@@ -296,23 +296,23 @@ function settingRow($: EngineInterface, e: PaneInput, key: string, label: string
   )
 }
 
-// One chip's row, indented under Status chips: its name and a sample of what it shows,
-// ↑ and ↓ to move it among the rows listed, then its switch.
+// One chip's row, indented under Status chips, laid out like the setting rows above it:
+// ↑ and ↓ first, so they line up down the list whatever the names; then the name over a
+// dim sample of what the chip shows, wrapping in a narrow panel; the switch at the right.
 function chipRow($: EngineInterface, e: PaneInput, chip: (typeof CHIPS)[number], isOn: boolean, listed: readonly ChipId[]) {
   const { Box, Button, Text } = $.ui.resolve(e)
   const i = listed.indexOf(chip.id)
   return (
-    <Box key={`chip-row-${chip.id}`} justifyContent="space-between" columnGap={2} paddingLeft={2}>
-      <Box flexShrink={1}>
-        <Text wrap="truncate-end">
-          {chip.label} <Text dimColor>{chip.sample}</Text>
-        </Text>
-      </Box>
-      <Box columnGap={2} flexShrink={0}>
+    <Box key={`chip-row-${chip.id}`} columnGap={2} paddingLeft={2}>
+      <Box columnGap={1} flexShrink={0}>
         <Button key={`chip-up-${chip.id}`} plain dimColor={i === 0} label="↑" onPress={() => moveChipBy($, chip.id, -1, listed)} />
         <Button key={`chip-down-${chip.id}`} plain dimColor={i === listed.length - 1} label="↓" onPress={() => moveChipBy($, chip.id, 1, listed)} />
-        <Button key={`chip-${chip.id}`} plain dimColor={!isOn} label={isOn ? '● ON ' : '○ OFF'} onPress={() => toggleChip($, chip.id)} />
       </Box>
+      <Box flexDirection="column" flexGrow={1} flexShrink={1}>
+        <Text>{chip.label}</Text>
+        <Text dimColor>{chip.sample}</Text>
+      </Box>
+      <Button key={`chip-${chip.id}`} plain dimColor={!isOn} label={isOn ? '● ON ' : '○ OFF'} onPress={() => toggleChip($, chip.id)} />
     </Box>
   )
 }
