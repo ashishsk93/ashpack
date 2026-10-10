@@ -502,23 +502,13 @@ test('compact mode: the popup shows the running step with a wave, a card per kin
     expect(drawn).toContain('"width":60') // half of 120
     expect(text).not.toContain('ctx') // the popup takes the chips' place while Claude works
     expect(text).toContain('▸ Thinking…')
-    // One card per kind, with its count; nothing listed until one is opened.
-    for (const card of ['Read 2', 'Command 2', 'Edit 1']) expect(drawn).toContain(`"label":"${card}"`)
+    // The calls are the Activity page's: the popup draws no card for them.
+    for (const kind of ['read', 'command', 'edit']) expect(drawn).not.toContain(`"key":"card-${kind}"`)
     expect(text).not.toContain('npm test')
     // The terminal draws the loader as text per frame; the desktop as an SVG that animates itself.
     if (surface === 'terminal') expect(text).toMatch(/[▁▂▃▄▅▆▇█]{3}/)
     else expect(drawn).toContain('<animate ')
     expect(drawn).toContain('#fab387') // the loader wears the skin
-    // Opened, the Command card lists its commands, how each went; again, it folds.
-    await band.press({ key: 'card-command' })
-    const open = flatten(await band.drawn())
-    expect(open).toContain('✓ $ npm test')
-    expect(open).toContain('✗ $ false')
-    expect(JSON.stringify(await band.drawn())).toContain('"label":"Command 2 ▾"')
-    await band.press({ key: 'card-edit' })
-    expect(flatten(await band.drawn())).toContain('✓ a.ts  +2 −1')
-    await band.press({ key: 'card-edit' })
-    expect(flatten(await band.drawn())).not.toContain('a.ts')
     await band.unmount()
   }
 
@@ -569,19 +559,20 @@ test('a plugin\'s own tool call is no step of the turn', { plugins: [poller] }, 
   await footer.press({ key: 'compact' })
   await $.turn.start({ text: 'go', turnId: 't1' } as never)
   const bandProps = { hasSurvey: false, isWorking: true, maxRows: 10, bodyColumns: 120, scroll: { offset: 0, bodyRows: 10, contentRows: 0 }, view: {} } as never
+  // The turn's calls, as the Activity page (its own pane, without the host) lists them.
   const popup = async () => {
-    const band = await $.ui.mount({ plugin: 'ashpack-status', surface: 'desktop', component: 'AbovePrompt', viewport: FULL, props: bandProps })
-    const drawn = await band.drawn()
-    await band.unmount()
-    return `${flatten(drawn)} ${JSON.stringify(drawn)}` // the cards are Buttons: their labels are props
+    const pane = await $.ui.mount({ plugin: 'ashpack-status', surface: 'desktop', component: 'Pane', requestId: 'ashpack-activity', props: PANE_PROPS })
+    const drawn = JSON.stringify(await pane.drawn())
+    await pane.unmount()
+    return drawn
   }
   await $.command.run({ command: 'poll', args: '' } as never) // the other mod's poll
   const quiet = await popup()
   expect(quiet).not.toContain('ListAgents')
-  expect(quiet).not.toContain('Tool 1')
   await $.tool.call({ tool: 'Skill', skill: 'verify', tool_use_id: 's1' } as never)
   const busy = await popup()
-  expect(busy).toContain('Skill 1')
+  expect(busy).toContain('/verify')
+  expect(busy).not.toContain('ListAgents')
   await footer.unmount()
 })
 

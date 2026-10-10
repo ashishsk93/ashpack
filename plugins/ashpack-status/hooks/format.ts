@@ -585,13 +585,10 @@ export const popupView = (
 ) => {
   const width = popupWidth(room.bodyColumns)
   const inner = width - 4 // border and padding
-  const rows = Math.max(2, Math.min(6, room.maxRows - 7)) // what fits under the cards
-  const calls = a?.calls ?? []
+  const rows = Math.max(2, Math.min(6, room.maxRows - 7)) // what fits under the card
   const done = list.filter(s => s.status === 'completed').length
-  const cards: Card[] = [
-    ...cardCounts(calls).map(k => ({ id: k.kind, label: `${k.label} ${k.count}`, hotkey: k.hotkey })),
-    ...(list.length > 0 ? [{ id: 'tasks' as const, label: `Tasks ${done}/${list.length}`, hotkey: 't' }] : []),
-  ]
+  // The calls are the Activity page's: the popup keeps one card, the task list's.
+  const cards: Card[] = list.length > 0 ? [{ id: 'tasks', label: `Tasks ${done}/${list.length}`, hotkey: 't' }] : []
   const shownOpen = cards.some(k => k.id === open) ? open : null
   return {
     width,
@@ -602,7 +599,6 @@ export const popupView = (
     facts: [list.length > 0 ? `${done}/${list.length}` : '', a && isTerminal ? lasted(now - a.startedAt) : ''].filter(Boolean),
     cards,
     shownOpen,
-    opened: shownOpen && shownOpen !== 'tasks' ? latest(calls.filter(x => x.kind === shownOpen), rows) : null,
     tasks: shownOpen === 'tasks' ? around(segments(list), rows) : [],
   }
 }

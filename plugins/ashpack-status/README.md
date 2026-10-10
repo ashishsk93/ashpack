@@ -44,16 +44,16 @@ Hides tool calls, tool groups and progress pills. Replies and the spinner stay. 
 ╭──────────────────────────────────────────────╮
 │ ◆ AshPack Fix the chart labels    2/5 · 1m 4s│
 │ ▸ Running npm test…          ▁▂▃▅▇▅▃▂▁▂▃▅    │
-│ Read 4  Edit 2  Command 3 ▾  Tasks 2/5       │
-│ ✓ $ npm run build                       4.2s │
-│ ✗ $ npm test                            2.0s │
-│ ▸ $ npm test -- --watch=false                │
+│ Tasks 2/5 ▾                                  │
+│ ✓ Read the chart code                        │
+│ ▸ Fix the chart labels                       │
+│ ○ Run the tests                              │
 ╰──────────────────────────────────────────────╯
 ```
 
 - The step running now, with a wave loader beside it (in the skin's accent when a skin is on); the task in hand, when Claude keeps a task list, heads the popup.
-- A card per kind of call this turn, with its count: Read, Edit, Command, Search, Web, Agent, Skill, Tool, and Tasks for the task list.
-- Click a card to list its calls under the cards: the files read, the commands run (`✓` passed, `✗` failed, `▸` running) with how long each took, the files edited with `+N −M`, the tasks with `✓` `▸` `○`. Click it again to fold it. On the terminal, ctrl+x tab focuses the popup and a card's letter opens it (`r` `e` `c` `s` `w` `a` `k` `o` `t`).
+- When Claude keeps a task list, a **Tasks** card opens onto it: `✓` done, `▸` in hand, `○` to do. Click it again to fold it; on the terminal, ctrl+x tab focuses the popup and `t` opens it.
+- The turn's tool calls are on the [Activity](#activity) page, which keeps them after the popup closes.
 
 Above the prompt (the desktop app, and the terminal's main screen) the popup takes the chips' place while Claude works, so the two never stack; a fullscreen terminal keeps the chips under the prompt. When calls run side by side, the line shows the latest one still running.
 

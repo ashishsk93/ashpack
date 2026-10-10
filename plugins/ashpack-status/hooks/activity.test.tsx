@@ -251,7 +251,7 @@ test('a turn\'s end: a subagent\'s keeps the popup; an interrupt and a refusal s
   // A subagent's turn ends: the main turn runs on, its popup and its calls with it.
   await $.turn.complete({ ...END, turnId: 's1', agentId: 'a1' } as never)
   const band = await $.ui.mount({ plugin: 'ashpack-status', surface: 'terminal', component: 'AbovePrompt', viewport: FULL, props: BAND })
-  expect(JSON.stringify(await band.drawn())).toContain('"label":"Read 1"')
+  expect(flatten(await band.drawn())).toContain('▸ Thinking…')
   await band.unmount()
   const term = await $.ui.mount({ plugin: 'ashpack-status', surface: 'terminal', ...DRAWER, props: PANE_PROPS })
   expect(flatten(await term.drawn())).toContain('TURN 1 · WORKING')

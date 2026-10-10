@@ -300,9 +300,8 @@ function loader($: EngineInterface, e: RenderInput<'AbovePrompt'>, f: number, ce
   return <Text key="loader" color={color}>{wave(f, Math.min(cells, LOADER_CELLS))}</Text>
 }
 
-// The working popup, half the band wide: the running step with the loader beside it, then a
-// card per kind of call (`Read 4`, `Command 3`) and one for the task list. A card pressed
-// open lists its calls (or the tasks) under the cards; pressed again, it folds.
+// The working popup, half the band wide: the running step with the loader beside it, and a
+// card for the task list that opens onto its tasks. The calls are the Activity page's.
 async function drawPopup($: EngineInterface, e: RenderInput<'AbovePrompt'>) {
   const { Box, Button, Text } = $.ui.resolve(e)
   const isTerminal = e.surface === 'terminal'
@@ -339,8 +338,6 @@ async function drawPopup($: EngineInterface, e: RenderInput<'AbovePrompt'>) {
           ))}
         </Box>
       ) : null}
-      {v.opened && v.opened.earlier > 0 ? <Text dimColor>{`  +${v.opened.earlier} earlier`}</Text> : null}
-      {v.opened ? v.opened.shown.map(call => rowView($, e, callRowOf(call, c), `call-${call.id}`, Math.max(10, v.inner - 8))) : null}
       {v.tasks.map((s, i) => (
         <Text key={`task-${i}`} wrap="truncate-end" bold={s.state === 'now'} color={s.state === 'now' ? c.accent : s.state === 'done' ? c.ok : undefined} dimColor={s.state === 'todo'}>
           {MARK[s.state]} {s.title}
