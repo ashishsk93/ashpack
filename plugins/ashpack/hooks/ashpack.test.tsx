@@ -1,4 +1,6 @@
 import { expect, mock, test } from 'claude-code/testing'
+import type { Plugin } from 'claude-code/testing'
+import type { On } from 'claude-code'
 
 import { findChips, findPages, misplaced, stepTab, withHostFirst, withoutChips } from './format'
 
@@ -141,12 +143,14 @@ test('the strip lifts the chips of the mods beneath into one row', async ($, on)
 
 test('Home says when another mod sits above the host, and moves the host first', async ($, on) => {
   mock.store(on)
-  mock.env(on, { HOME: '/nowhere' })
+  mock.env(on, { HOME: '/nowhere', CLAUDE_CONFIG_DIR: '/config' })
   const user = { enabledPlugins: { 'baton@baton-mods': true, 'ashpack@ashpack': true, 'ashpack-status@ashpack': true } }
   on('settings.read', () => ({ value: user }))
   let written = ''
-  on('fs.read', () => ({ value: JSON.stringify(user) }))
-  on('fs.write', ($, e) => ((written = e.text), { value: undefined }))
+  let isWritable = false
+  const paths: string[] = []
+  on('fs.read', ($, e) => (paths.push(e.path), { value: written || JSON.stringify(user) }))
+  on('fs.write', ($, e) => (paths.push(e.path), isWritable ? (written = e.text) : undefined, { value: undefined }))
   const toasts: string[] = []
   on('ui.toast', ($, e) => (toasts.push(e.text), { value: undefined }))
   on('prompt.fill', () => ({ isFilled: true }) as never)
@@ -159,9 +163,102 @@ test('Home says when another mod sits above the host, and moves the host first',
   await $.session.start({ source: 'startup', cwd: '/repo' } as never)
   const pane = await $.ui.mount({ plugin: 'ashpack', surface: 'terminal', ...DRAWER, props: PANE_PROPS })
   expect(flatten(await pane.drawn())).toContain('Another mod sits above AshPack')
+  // A write that did not land: read back, the banner stays and the toast says why.
   await pane.press({ key: 'fix-order' })
+  expect(toasts.join(' ')).toContain('/config/settings.json still lists another mod first')
+  expect(flatten(await pane.drawn())).toContain('Another mod sits above AshPack')
+  // The user's settings live under CLAUDE_CONFIG_DIR when it is set.
+  isWritable = true
+  await pane.press({ key: 'fix-order' })
+  expect([...new Set(paths)]).toEqual(['/config/settings.json'])
   expect(Object.keys(JSON.parse(written).enabledPlugins)[0]).toBe('ashpack@ashpack')
   expect(toasts.join(' ')).toContain('first in enabledPlugins')
   expect(flatten(await pane.drawn())).not.toContain('Another mod sits above AshPack')
   await pane.unmount()
+})
+
+// What the host stores, the panes it opened and closed, and its toasts.
+function drawerWorld(on: On, stored: Record<string, unknown> = {}) {
+  mock.store(on, stored)
+  on('settings.read', () => ({ value: { enabledPlugins: { 'ashpack@ashpack': true } } }))
+  const seen = { opened: [] as string[], closed: [] as string[], toasts: [] as string[] }
+  on('ui.open', ($, e) => (seen.opened.push(e.id), { value: { isPlaced: true } }))
+  on('ui.close', ($, e) => (seen.closed.push(e.id), { value: undefined }))
+  on('ui.toast', ($, e) => (seen.toasts.push(e.text), { value: undefined }))
+  on('command.register', () => ({ value: undefined }) as never)
+  on('session.start', ($, e) => e as never)
+  on('ui.render', { component: 'SessionMode' }, ($, e) => {
+    const { Box } = $.ui.resolve(e)
+    return <Box />
+  })
+  on('ui.render', DRAWER, ($, e) => {
+    const { Box, Button } = $.ui.resolve(e)
+    return (
+      <Box>
+        <Box key="ashpack-page:Baton">
+          <Button key="baton-ping" plain label="ping" onPress={() => undefined} />
+        </Box>
+      </Box>
+    )
+  })
+  return seen
+}
+
+// Stands in for a close the host did not make (the person's Esc reaches it the same way).
+const closer: Plugin = {
+  name: 'closer',
+  register(on) {
+    on('command.run', { command: 'close-drawer' }, async $ => {
+      await $.ui.close({ id: 'ashpack' })
+      return {}
+    })
+  },
+}
+
+test('/ashpack opens a page and closes the drawer; a new session brings back the page and the open drawer', { plugins: [closer] }, async ($, on) => {
+  const seen = drawerWorld(on)
+  const start = () => $.session.start({ source: 'startup', cwd: '/repo' } as never)
+  const footer = async () => {
+    const mounted = await $.ui.mount({ plugin: 'ashpack', surface: 'terminal', component: 'SessionMode', viewport: FULL, props: { modes: [] } })
+    const label = (await mounted.find({ key: 'ashpack' }))?.text
+    await mounted.unmount()
+    return label
+  }
+  await start()
+  expect(seen.opened).toEqual([]) // nothing kept: the drawer waits to be asked
+  await $.command.run({ command: 'ashpack', args: 'Baton' } as never)
+  expect(seen.opened).toEqual(['ashpack'])
+  const pane = await $.ui.mount({ plugin: 'ashpack', surface: 'terminal', ...DRAWER, props: PANE_PROPS })
+  expect(await pane.find({ key: 'baton-ping' })).toBeDefined()
+  await $.command.run({ command: 'ashpack', args: 'close' } as never)
+  expect(seen.closed).toEqual(['ashpack'])
+  expect(await footer()).toContain('▸')
+  // Closed, it stays closed; the page is kept.
+  await start()
+  expect(seen.opened).toEqual(['ashpack'])
+  // Left open, it opens again, on the kept page.
+  await $.command.run({ command: 'ashpack', args: '' } as never)
+  await start()
+  expect(seen.opened).toEqual(['ashpack', 'ashpack', 'ashpack'])
+  expect(await pane.find({ key: 'baton-ping' })).toBeDefined()
+  // A close the host did not make folds it too, and it stays closed.
+  await $.command.run({ command: 'close-drawer', args: '' } as never)
+  expect(await footer()).toContain('▸')
+  await start()
+  expect(seen.opened).toHaveLength(3)
+  await pane.unmount()
+})
+
+test('the 0.9.5 notice is not for a fresh install', async ($, on) => {
+  const seen = drawerWorld(on)
+  await $.session.start({ source: 'startup', cwd: '/repo' } as never)
+  await $.session.start({ source: 'startup', cwd: '/repo' } as never)
+  expect(seen.toasts.join(' ')).not.toContain('0.9.5')
+})
+
+test('the 0.9.5 notice is said once to someone who had the host before', async ($, on) => {
+  const seen = drawerWorld(on, { compact: true }) // what the host stored before 0.9.5
+  await $.session.start({ source: 'startup', cwd: '/repo' } as never)
+  await $.session.start({ source: 'startup', cwd: '/repo' } as never)
+  expect(seen.toasts.filter(t => t.includes('0.9.5'))).toHaveLength(1)
 })

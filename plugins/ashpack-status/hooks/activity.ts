@@ -1,15 +1,35 @@
-import type { Activity, Call, CallKind, History, Totals, Turn } from '../types'
-import type { Colors, TextSpan } from './format'
-import { cardCounts, levelColor, money, took, waveSvg } from './format'
+import type { Activity, Call, CallKind, History, StatusData, Totals, Turn } from '../types'
+import type { Colors, Row, TextSpan } from './format'
+import { bar, cardCounts, ellipsis, lasted, latest, LEVELS, levelColor, lineOf, MARK_OF, money, took, waveSvg } from './format'
 
 // The Activity page, pure: the turn history and the session's totals, what the page shows,
 // and its drawings. The desktop gets SVG cards; the terminal, the same facts as text spans.
 
 export const MAX_TURNS = 30 // finished turns the page keeps, the latest
+// ponytail: a longer turn counts its latest 500 calls on the Activity page; keep running tallies if that bites
+export const MAX_CALLS = 500 // calls a turn keeps, the latest
+export const CALL_ROWS = 12 // calls the page lists at first, the latest; Show more adds as many again
+export const SVG_ROWS = 64 // calls one drawing holds: the desktop refuses an image over 131072 characters, and a row of escaped text is 1.7k
 const MAX_FILES = 500 // edited paths the totals keep, to count them
 
 export const NO_TOTALS: Totals = { turns: 0, workMs: 0, calls: 0, failed: 0, added: 0, removed: 0, files: [] }
 export const NO_HISTORY: History = { turns: [], totals: NO_TOTALS }
+
+// A call starts: its line heads the popup, and a call of the main thread joins the turn's
+// list (the latest MAX_CALLS); a subagent's call is a line alone.
+export const startCall = (a: Activity, id: string, label: string, call: Pick<Call, 'kind' | 'target'> | null): Activity => ({
+  ...a,
+  steps: [...a.steps, { id, label }],
+  calls: call ? [...a.calls, { id, kind: call.kind, target: call.target, state: 'running' as const }].slice(-MAX_CALLS) : a.calls,
+})
+
+// A call ends: its line leaves the popup (the latest still running takes it, else thinking)
+// and its row says how it went, how long it took, an edit's size.
+export const settleCall = (a: Activity, id: string, end: { isFailed: boolean; ms: number; size?: { added: number; removed: number } }): Activity => ({
+  ...a,
+  steps: a.steps.filter(s => s.id !== id),
+  calls: a.calls.map(x => (x.id === id ? { ...x, state: end.isFailed ? ('failed' as const) : ('ok' as const), ms: end.ms, ...end.size } : x)),
+})
 
 type Usage = { input_tokens: number; output_tokens: number; cache_read_input_tokens: number; cache_creation_input_tokens: number }
 
@@ -32,6 +52,7 @@ const edited = (calls: readonly Call[]): string[] => calls.filter(c => c.kind ==
 export const withTurn = (h: History, turn: Turn): History => ({ turns: [...h.turns, turn].slice(-MAX_TURNS), totals: addTurn(h.totals, turn) })
 
 export const addTurn = (t: Totals, turn: Turn): Totals => ({
+  since: t.since ?? turn.startedAt,
   turns: t.turns + 1,
   workMs: t.workMs + turn.ms,
   calls: t.calls + turn.calls.length,
@@ -47,20 +68,12 @@ export type Shown = Omit<Turn, 'ms' | 'outcome'> & { label: string; isLive: bool
 export const shownOf = (a: Activity | null, turns: readonly Turn[], pick: number | null): Shown | null => {
   const picked = pick === null ? undefined : turns.find(t => t.n === pick)
   if (picked) return { ...picked, label: picked.prompt, isLive: false }
-  if (a) return { n: a.n, prompt: a.prompt, startedAt: a.startedAt, calls: a.calls, label: a.label, isLive: true }
+  if (a) return { n: a.n, prompt: a.prompt, startedAt: a.startedAt, calls: a.calls, label: lineOf(a), isLive: true }
   const last = turns.at(-1)
   return last ? { ...last, label: last.prompt, isLive: false } : null
 }
 
 // ── numbers ──
-
-// 45s, 2m 10s, 1h 04m
-export const lasted = (ms: number): string => {
-  const s = Math.max(0, Math.round(ms / 1000))
-  if (s < 60) return `${s}s`
-  if (s < 3600) return `${Math.floor(s / 60)}m ${s % 60}s`
-  return `${Math.floor(s / 3600)}h ${String(Math.floor((s % 3600) / 60)).padStart(2, '0')}m`
-}
 
 // 820, 12.4k, 38k, 1.2M
 export const tokens = (n: number): string =>
@@ -83,17 +96,19 @@ export const turnLabel = (t: { n: number; prompt: string; ms?: number; calls: re
   const tail = ` · ${t.ms === undefined ? 'working' : lasted(t.ms)} · ${t.calls.length}`
   const prompt = (t.prompt || 'no prompt').replace(/\s+/g, ' ')
   const room = Math.max(8, chars - tail.length - `#${t.n}  `.length)
-  return `#${t.n}  ${[...prompt].length > room ? `${[...prompt].slice(0, room - 1).join('')}…` : prompt}${tail}`
+  return `#${t.n}  ${ellipsis(prompt, room)}${tail}`
 }
 
 export type Tile = { label: string; value: TextSpan[]; sub?: TextSpan }
 
-// The session's tiles: the finished turns' totals with the running turn's so far.
-export const sessionTiles = (t: Totals, a: Activity | null, now: number, c: Colors, sessionStart?: number, costUsd?: number): Tile[] => {
+// The session's tiles: the finished turns' totals with the running turn's so far. The session's
+// time runs from its first turn here, so it counts what the turns count (a resumed session's
+// own start is its first launch).
+export const sessionTiles = (t: Totals, a: Activity | null, now: number, c: Colors, costUsd?: number): Tile[] => {
   const live = a ? addTurn(t, turnOf(a, { ms: Math.max(0, now - a.startedAt), outcome: 'answer' })) : t
   const failed = a ? live.failed - a.calls.filter(x => x.state === 'running').length : live.failed // running is not failed yet
   return [
-    { label: 'Session', value: [{ text: sessionStart ? lasted(now - sessionStart) : '—' }] },
+    { label: 'Session', value: [{ text: live.since !== undefined ? lasted(now - live.since) : '—' }] },
     { label: 'Working', value: [{ text: lasted(live.workMs) }] },
     { label: 'Turns', value: [{ text: String(live.turns) }] },
     { label: 'Tool calls', value: [{ text: String(live.calls) }], ...(failed > 0 ? { sub: { text: `${failed} failed`, color: c.hot } } : {}) },
@@ -105,6 +120,40 @@ export const sessionTiles = (t: Totals, a: Activity | null, now: number, c: Colo
     { label: 'Spend', value: [{ text: costUsd !== undefined ? money(costUsd) : '—' }] },
   ]
 }
+
+// The desktop's cards are images: what each says, for a screen reader.
+export const heroAlt = (s: Shown | null): string =>
+  !s ? 'No turns yet' : s.isLive ? `Turn ${s.n}, working: ${s.label}` : `Turn ${s.n}, ${s.outcome ?? 'answer'}: ${s.prompt}. ${turnFacts(s).join(', ')}`
+
+export const tilesAlt = (tiles: readonly Tile[]): string => tiles.map(t => `${t.label} ${t.value.map(x => x.text).join('')}${t.sub ? ` (${t.sub.text})` : ''}`).join(', ')
+
+// What the page draws, from what it reads: the turn in view, its calls under the filter (the
+// latest `limit`), a bar per turn, the session's tiles. The ended turn joins the history a
+// write before the live one clears, so a live turn the totals count already is not counted twice;
+// a turn picked that has since left the history is no pick.
+export const activityView = (r: {
+  held: Activity | null
+  history: History
+  picked: number | null
+  filter: CallKind | 'all'
+  limit: number
+  data: StatusData | null
+  c: Colors
+  now: number
+}) => {
+  const { turns: list, totals } = r.history
+  const a = r.held && r.held.n > totals.turns ? r.held : null
+  const pick = list.some(x => x.n === r.picked) ? r.picked : null
+  const shown = shownOf(a, list, pick)
+  const kinds = shown ? cardCounts(shown.calls) : []
+  const kind = kinds.some(k => k.kind === r.filter) ? r.filter : 'all'
+  const { shown: calls, earlier } = latest(shown ? shown.calls.filter(x => kind === 'all' || x.kind === kind) : [], r.limit)
+  const bars = [...list, ...(a ? [{ n: a.n, prompt: a.prompt, ms: Math.max(0, r.now - a.startedAt), calls: a.calls, isLive: true as const }] : [])]
+  const tiles = sessionTiles(totals, a, r.now, r.c, r.data?.costUsd)
+  return { pick, shown, kind, kinds, calls, earlier, bars, c: r.c, now: r.now, tiles, context: r.data?.contextPercent }
+}
+
+export type ActivityView = ReturnType<typeof activityView>
 
 // ── kinds ──
 
@@ -130,8 +179,6 @@ export const mixCells = (calls: readonly Call[], width: number, c: Colors): Text
   })
 }
 
-const LEVELS = '▁▂▃▄▅▆▇█'
-
 type Bar = { n: number; ms: number; calls: readonly Call[]; isLive?: boolean }
 
 // The turns as a row of bars, each as tall as the turn was long, in its busiest kind's hue.
@@ -142,6 +189,32 @@ export const sparkCells = (bars: readonly Bar[], c: Colors, pick: number | null)
     return { text: LEVELS[Math.round(Math.sqrt(b.ms / max) * 7)] ?? '▁', color: top?.color ?? c.muted, dim: pick !== null && b.n !== pick }
   })
 }
+
+// The head's rows, in its tone: how the turn stands and its time, what it does now or what was
+// asked, its prompt or its facts, its calls by kind. The wave is the popup's: here the time
+// ticks once a second, so the drawer is not drawn again eight times a second.
+export const heroRows = (s: Shown | null, now: number, width: number, c: Colors): { tone: string; rows: Row[] } => {
+  if (!s) return { tone: c.accent, rows: [{ spans: [{ text: 'Ready when you are', bold: true }] }, { spans: [{ text: 'Each turn’s tool calls, timings and cost land here.', dim: true }] }] }
+  const tone = s.isLive ? c.accent : s.outcome === 'answer' ? c.ok : c.hot
+  const head = `${s.isLive ? '●' : MARK_OF[s.outcome ?? 'answer']} TURN ${s.n} · ${s.isLive ? 'WORKING' : WORD[s.outcome ?? 'answer']}`
+  return {
+    tone,
+    rows: [
+      { spans: [{ text: head, color: tone, bold: true }], right: { text: lasted(s.isLive ? now - s.startedAt : (s.ms ?? 0)), dim: true } },
+      { spans: [{ text: s.isLive ? `${s.label}…` : s.prompt || `Turn ${s.n}`, bold: true }] },
+      { spans: [{ text: s.isLive ? (s.prompt ? `“${s.prompt}”` : ' ') : turnFacts(s).join(' · '), dim: true }] },
+      { spans: mixCells(s.calls, width, c) },
+    ],
+  }
+}
+
+// The context's fill as a bar of `cols`' room, and the turns as a row of bars.
+export const contextRow = (pct: number, cols: number, c: Colors): TextSpan[] => {
+  const [lit, track] = bar(pct, Math.max(8, Math.min(24, cols - 16)))
+  return [{ text: 'CONTEXT ', dim: true }, { text: lit, color: levelColor(pct, c) }, { text: track, dim: true }, { text: ` ${pct}%`, bold: true }]
+}
+
+export const timelineRow = (bars: readonly Bar[], cols: number, c: Colors, pick: number | null): TextSpan[] => [{ text: 'TIMELINE ', dim: true }, ...sparkCells(bars.slice(-(cols - 8)), c, pick)]
 
 // ── the desktop's drawings ──
 // Each an SVG card on its own background: the skin's when one is on, else light or dark as
@@ -157,7 +230,7 @@ const esc = (t: string): string =>
 const rules = (bg: string, text: string, sub: string): string =>
   `.bg{fill:${bg}}.t{fill:${text}}.s{fill:${sub}}.k{fill:${text};fill-opacity:.07}.ln{stroke:${text};stroke-opacity:.12}`
 
-export const themeCss = (c: Colors): string =>
+const themeCss = (c: Colors): string =>
   `<style>${c.bg && c.text ? rules(c.bg, c.text, c.muted) : `${rules('#ffffff', '#1f1e1b', '#6e6c66')}@media (prefers-color-scheme: dark){${rules('#262624', '#ecebe6', '#a2a098')}}`}</style>`
 
 // The page's width in pixels, from the cells the pane has.
@@ -167,10 +240,8 @@ export const pagePx = (columns: number): number => Math.round(Math.min(760, Math
 const widthOf = (t: string, size: number, font: 'sans' | 'mono' | 'caps' = 'sans'): number =>
   [...t].length * size * { sans: 0.56, mono: 0.6, caps: 0.74 }[font]
 
-const clip = (t: string, px: number, size: number, font: 'sans' | 'mono' = 'sans'): string => {
-  const max = Math.max(1, Math.floor(px / (size * (font === 'mono' ? 0.6 : 0.56))))
-  return [...t].length <= max ? t : `${[...t].slice(0, max - 1).join('')}…`
-}
+const clip = (t: string, px: number, size: number, font: 'sans' | 'mono' = 'sans'): string =>
+  ellipsis(t, Math.max(1, Math.floor(px / (size * (font === 'mono' ? 0.6 : 0.56)))))
 
 type TextOpts = { x: number; y: number; size: number; cls?: string; fill?: string; weight?: number; end?: boolean; middle?: boolean; mono?: boolean; caps?: boolean }
 
@@ -208,7 +279,8 @@ const mark = (state: MarkState, x: number, y: number, c: Colors): string => {
 
 const callState = (call: Call): MarkState => (call.state === 'running' ? 'live' : call.state)
 
-const WORD: Record<Turn['outcome'], string> = { answer: 'DONE', aborted: 'STOPPED', refusal: 'REFUSED', error: 'FAILED' }
+// How a turn ended, in the head's word.
+export const WORD: Record<Turn['outcome'], string> = { answer: 'DONE', aborted: 'STOPPED', refusal: 'REFUSED', error: 'FAILED' }
 const WAVE_PX = 64
 
 // The page's head: the turn in view. Running, what it does now with the wave beside it; done,
@@ -282,7 +354,10 @@ const legend = (calls: readonly Call[], c: Colors, x0: number, x1: number, y: nu
 const ROW = 30
 
 // A turn's calls, one row each: how it went, its kind, what it acted on, an edit's size, how long.
-export const callsSvg = (calls: readonly Call[], earlier: number, c: Colors, w: number): { source: string; height: number } => {
+// At most SVG_ROWS of them, the latest, so no list makes an image the desktop refuses.
+export const callsSvg = (list: readonly Call[], before: number, c: Colors, w: number): { source: string; height: number } => {
+  const { shown: calls, earlier: cut } = latest(list, SVG_ROWS)
+  const earlier = before + cut
   const right = w - 16
   const top = earlier > 0 ? 26 : 6 // `+ N earlier` heads the list
   const rows = calls.map((call, i) => {

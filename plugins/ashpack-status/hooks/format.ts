@@ -1,15 +1,6 @@
-import type { Call, CallKind, ChipId, GitInfo, PullRequest, RateWindow, RepoInfo, Section, StatusData } from '../types'
+import type { Activity, Call, CallKind, ChipId, GitInfo, PullRequest, RateWindow, RepoInfo, Section, StatusData, Turn } from '../types'
 
 // Pure helpers, kept apart from the hooks so the tests can call them directly.
-
-const MODES: Record<string, string> = {
-  auto: '⏵⏵ auto',
-  plan: '⏸ plan',
-  acceptEdits: '⏵⏵ accept edits',
-  bypassPermissions: '⚠ bypass',
-  dontAsk: "don't ask",
-  default: '',
-}
 
 const WINDOWS: Record<string, string> = { five_hour: 'session', seven_day: 'week' }
 
@@ -22,6 +13,28 @@ export const COLORS = { ok: '#1a9450', warn: '#a87700', hot: '#e5484d', accent: 
 // The colours the chips and the popup draw in: AshPack's own, or the active skin's. A skin
 // shares its card colours and more hues too (Skins 0.8.1 on), for the Activity page.
 export type Colors = { [K in keyof typeof COLORS]: string } & { bg?: string; text?: string; cyan?: string; pink?: string; purple?: string }
+
+// A palette as the Skins mod shares it: every colour AshPack draws with, as a string.
+export const isColors = (v: unknown): v is Colors =>
+  typeof v === 'object' && v !== null && Object.keys(COLORS).every(k => typeof (v as Record<string, unknown>)[k] === 'string')
+
+// Where the status chips go: under the prompt (PromptHint) on the fullscreen terminal,
+// above it (AbovePrompt) everywhere else. The desktop reports fullscreen, since it docks
+// panes, but draws no mod tree under its prompt; its footer is a one-line strip that
+// truncates, so the chips cannot go there either. In the band, the working popup takes
+// the chips' place while Claude works, so the two never stack.
+export const isUnderPrompt = (e: { surface: string; viewport?: { isFullscreen?: boolean } }): boolean =>
+  e.surface === 'terminal' && e.viewport?.isFullscreen === true
+
+// Text cut to `max` code points, an ellipsis in the last when it is longer; never splits a
+// surrogate pair. Fast on a long one: only its head is split into code points.
+export const ellipsis = (s: string, max: number): string => {
+  if (s.length <= max) return s
+  const head = [...s.slice(0, max * 2)] // `max` code points take at most twice as many units
+  return head.length <= max && s.length <= max * 2 ? s : `${head.slice(0, max - 1).join('')}…`
+}
+
+export const oneLine = (s: string): string => s.replace(/\s+/g, ' ').trim()
 
 // "claude-opus-5-5[1m]" -> "Opus 5.5 1M"; "opus[1m]" -> "Opus 1M"
 export const prettyModel = (id: string): string => {
@@ -44,11 +57,20 @@ export const shortDuration = (ms: number): string => {
   return `${m}m`
 }
 
+// 45s, 2m 10s, 1h 04m
+export const lasted = (ms: number): string => {
+  const s = Math.max(0, Math.round(ms / 1000))
+  if (s < 60) return `${s}s`
+  if (s < 3600) return `${Math.floor(s / 60)}m ${s % 60}s`
+  return `${Math.floor(s / 3600)}h ${String(Math.floor((s % 3600) / 60)).padStart(2, '0')}m`
+}
+
+// How long a call ran: `0.4s` under ten seconds, then as `lasted`.
+export const took = (ms: number): string => (ms < 10_000 ? `${(Math.max(0, ms) / 1000).toFixed(1)}s` : lasted(ms))
+
 // five_hour -> session, seven_day -> week, seven_day_fable -> fable
 export const windowLabel = (kind: string): string =>
   WINDOWS[kind] ?? kind.replace(/^seven_day_/, '').replace(/_/g, ' ')
-
-export const modeLabel = (mode: string): string => MODES[mode] ?? mode
 
 export const effortLabel = (level: string): string => `${EFFORT[level] ?? '○'} ${level}`
 
@@ -63,14 +85,15 @@ export const bar = (percent: number, width: number): [string, string] => {
 
 export const money = (usd: number): string => (usd >= 100 ? `$${Math.round(usd)}` : `$${usd.toFixed(2)}`)
 
-// `git status --porcelain=v2 --branch` -> branch, changed files, ahead/behind. A path's
-// two status letters say staged (first) and changed in the tree (second); `u` is a
-// conflict, `?` a new file.
+// `git status --porcelain=v2 --branch --show-stash` -> branch, changed files, ahead/behind,
+// stashes. A path's two status letters say staged (first) and changed in the tree (second);
+// `u` is a conflict, `?` a new file.
 export const parseGit = (porcelain: string): GitInfo | null => {
   const lines = porcelain.split('\n').filter(Boolean)
   const head = lines.find(l => l.startsWith('# branch.head '))?.slice(14)
   if (!head) return null
   const ab = /^# branch\.ab \+(\d+) -(\d+)/m.exec(porcelain)
+  const stash = /^# stash (\d+)/m.exec(porcelain)?.[1]
   const paths = lines.filter(l => /^[12] /.test(l))
   return {
     branch: head === '(detached)' ? 'detached' : head,
@@ -81,7 +104,15 @@ export const parseGit = (porcelain: string): GitInfo | null => {
     changed: paths.filter(l => l[3] !== '.').length,
     untracked: lines.filter(l => l.startsWith('? ')).length,
     conflicts: lines.filter(l => l.startsWith('u ')).length,
+    ...(stash !== undefined ? { stashes: Number(stash) } : {}),
   }
+}
+
+// Whether `git version` names a git that prints `# stash N` (2.35 on): with an older one, no
+// line does not mean no stashes.
+export const printsStash = (version: string): boolean => {
+  const [major = 0, minor = 0] = (/(\d+)\.(\d+)/.exec(version) ?? []).slice(1).map(Number)
+  return major > 2 || (major === 2 && minor >= 35)
 }
 
 // ── the repo chips' data: pure readers of what git and gh print ──
@@ -255,11 +286,10 @@ const SUBJECT = 40 // a commit subject's room in its chip
 const commitCell = (repo: RepoInfo, now: number, c: Colors): Cell => {
   if (!repo.commit) return [{ text: repo.commit === null ? 'no commits yet' : 'commit —', dim: true }]
   const { at, subject } = repo.commit
-  const clipped = [...subject].length > SUBJECT ? `${[...subject].slice(0, SUBJECT - 1).join('')}…` : subject
   return [
     { text: 'commit ', dim: true },
     { text: `${shortDuration(now - at)} ago`, color: c.blue },
-    { text: ` · ${clipped}` },
+    { text: ` · ${ellipsis(subject, SUBJECT)}` },
   ]
 }
 
@@ -338,7 +368,7 @@ export const chipBarWidth = (total: number): number => (total >= 160 ? 8 : total
 
 // ── the loader: a row of bars that rise and fall in turn, a wave moving right ──
 
-const LEVELS = '▁▂▃▄▅▆▇█'
+export const LEVELS = '▁▂▃▄▅▆▇█'
 
 // The terminal's loader at `frame`: `width` cells, each a bar of the wave.
 export const wave = (frame: number, width: number): string =>
@@ -372,8 +402,12 @@ export const popupWidth = (columns: number): number => Math.min(columns, Math.ma
 
 // ── the working popup: a card per kind of call, the running step, the task list ──
 
-// Calls the popup counts by kind; the task-list tools are the Tasks card instead.
-const PLAN_TOOLS = new Set(['TodoWrite', 'TaskCreate', 'TaskUpdate', 'TaskGet', 'TaskList', 'TaskOutput', 'TaskStop'])
+// The task-list tools: the Tasks card, not a card of calls. (TaskStop and TaskOutput act on a
+// background task, so they are calls.)
+const PLAN_TOOLS = new Set(['TodoWrite', 'TaskCreate', 'TaskUpdate', 'TaskGet', 'TaskList'])
+
+export const TARGET_CHARS = 200 // what a call keeps of its target: a heredoc is not kept whole
+const LABEL_CHARS = 40 // what the popup's line quotes of a command, a pattern, a description
 
 export const CARDS: readonly { kind: CallKind; label: string; hotkey: string }[] = [
   { kind: 'read', label: 'Read', hotkey: 'r' },
@@ -388,42 +422,55 @@ export const CARDS: readonly { kind: CallKind; label: string; hotkey: string }[]
 
 // A path as the popup shows it: under the session's folder, relative to it.
 const shortPath = (p: string, cwd: string): string => (cwd && p.startsWith(`${cwd}/`) ? p.slice(cwd.length + 1) : p)
+const base = (p: string): string => p.split('/').pop() ?? p
+const quote = (s: string): string => ellipsis(oneLine(s), LABEL_CHARS)
 
-// A tool call's kind and what it acted on; null for the task-list tools.
-export const callOf = (tool: string, input: unknown, cwd: string): { kind: CallKind; target: string } | null => {
-  if (PLAN_TOOLS.has(tool)) return null
-  const i = (input ?? {}) as Record<string, unknown>
-  const str = (k: string) => (typeof i[k] === 'string' ? (i[k] as string) : '')
-  const oneLine = (t: string) => t.replace(/\s+/g, ' ').trim()
-  switch (tool) {
-    case 'Read':
-      return { kind: 'read', target: shortPath(str('file_path'), cwd) }
-    case 'Edit':
-    case 'Write':
-    case 'MultiEdit':
-    case 'NotebookEdit':
-      return { kind: 'edit', target: shortPath(str('file_path') || str('notebook_path'), cwd) }
-    case 'Bash':
-    case 'PowerShell':
-      return { kind: 'command', target: oneLine(str('command')) }
-    case 'Grep':
-    case 'Glob': {
-      const where = str('path') ? ` in ${shortPath(str('path'), cwd)}` : ''
-      return { kind: 'search', target: `${str('pattern')}${where}` }
-    }
-    case 'WebFetch':
-      return { kind: 'web', target: str('url') }
-    case 'WebSearch':
-      return { kind: 'web', target: str('query') }
-    case 'Agent':
-    case 'Task':
-      return { kind: 'agent', target: oneLine(str('description') || str('prompt')) }
-    case 'Skill':
-      return { kind: 'skill', target: `/${str('skill')}` }
-    default:
-      return { kind: 'tool', target: tool.replace(/^mcp__/, '').replace(/__/g, ' ') }
-  }
+// A tool call as the popup and the Activity page tell it: its kind, the popup's line, what it acted on.
+export type ToolLine = { kind: CallKind; label: string; target: string }
+
+type Field = (key: string) => string
+
+const edit = (str: Field, cwd: string): ToolLine => {
+  const path = str('file_path') || str('notebook_path')
+  return { kind: 'edit', label: `Editing ${base(path)}`, target: shortPath(path, cwd) }
 }
+const command = (str: Field): ToolLine => ({ kind: 'command', label: `Running ${quote(str('description') || str('command'))}`, target: oneLine(str('command')) })
+const search = (str: Field, cwd: string): ToolLine => ({
+  kind: 'search',
+  label: `Searching ${quote(str('pattern'))}`,
+  target: `${str('pattern')}${str('path') ? ` in ${shortPath(str('path'), cwd)}` : ''}`,
+})
+const agent = (str: Field): ToolLine => ({ kind: 'agent', label: `Delegating ${quote(str('description'))}`, target: oneLine(str('description') || str('prompt')) })
+
+// The tools AshPack knows by name; any other is a Tool, by its name.
+const TOOLS: Readonly<Record<string, (str: Field, cwd: string) => ToolLine>> = {
+  Read: (str, cwd) => ({ kind: 'read', label: `Reading ${base(str('file_path'))}`, target: shortPath(str('file_path'), cwd) }),
+  Edit: edit,
+  Write: edit,
+  MultiEdit: edit,
+  NotebookEdit: edit,
+  Bash: command,
+  PowerShell: command,
+  Grep: search,
+  Glob: search,
+  WebFetch: str => ({ kind: 'web', label: 'Browsing the web', target: str('url') }),
+  WebSearch: str => ({ kind: 'web', label: 'Browsing the web', target: str('query') }),
+  Agent: agent,
+  Task: agent,
+  Skill: str => ({ kind: 'skill', label: `Running /${quote(str('skill'))}`, target: `/${str('skill')}` }),
+  TaskStop: str => ({ kind: 'tool', label: 'Stopping a background task', target: `TaskStop ${str('task_id') || str('shell_id')}` }),
+}
+
+export const callOf = (tool: string, input: unknown, cwd: string): ToolLine => {
+  const i = (input ?? {}) as Record<string, unknown>
+  const str: Field = k => (typeof i[k] === 'string' ? (i[k] as string) : '')
+  const name = tool.replace(/^mcp__/, '').replace(/__/g, ' ')
+  const line = (Object.hasOwn(TOOLS, tool) ? TOOLS[tool] : undefined)?.(str, cwd) ?? { kind: 'tool', label: `Using ${name}`, target: name }
+  return { ...line, target: ellipsis(line.target, TARGET_CHARS) }
+}
+
+// Whether a tool's calls are listed (on a card, on the Activity page): all but the task list's.
+export const isListed = (tool: string): boolean => !PLAN_TOOLS.has(tool)
 
 // An edit's size from its result: lines added and removed (a new file is all added).
 export const editSize = (output: unknown): { added: number; removed: number } | undefined => {
@@ -441,12 +488,8 @@ export const cardCounts = (calls: readonly Call[]): { kind: CallKind; label: str
 // The last `n` of a card's calls, and how many came before them.
 export const latest = <T>(items: readonly T[], n: number): { shown: T[]; earlier: number } => ({ shown: items.slice(-n), earlier: Math.max(0, items.length - n) })
 
-// How long a call ran: `0.4s`, `12s`, `1m 4s`.
-export const took = (ms: number): string => {
-  if (ms < 10_000) return `${(ms / 1000).toFixed(1)}s`
-  const s = Math.round(ms / 1000)
-  return s < 60 ? `${s}s` : `${Math.floor(s / 60)}m ${s % 60}s`
-}
+// The items in runs of at most `n`, in order.
+export const chunks = <T>(items: readonly T[], n: number): T[][] => Array.from({ length: Math.ceil(items.length / n) }, (_, i) => items.slice(i * n, i * n + n))
 
 export type Segment = { title: string; state: 'done' | 'now' | 'todo' }
 
@@ -482,33 +525,88 @@ export const updateTask = (plan: readonly Section[], u: { taskId: string; subjec
     ? plan.filter(s => s.id !== u.taskId)
     : plan.map(s => (s.id === u.taskId ? { ...s, title: u.subject ?? s.title, status: asStatus(u.status) ?? s.status } : s))
 
-// A short line for what a tool call is doing.
-export const describeTool = (tool: string, input: unknown): string => {
-  const i = (input ?? {}) as Record<string, unknown>
-  const str = (k: string) => (typeof i[k] === 'string' ? (i[k] as string) : '')
-  const base = (p: string) => p.split('/').pop() ?? p
-  const clip = (s: string) => (s.length > 40 ? `${s.slice(0, 39)}…` : s)
-  switch (tool) {
-    case 'Bash':
-      return `Running ${clip(str('description') || str('command'))}`
-    case 'Read':
-      return `Reading ${base(str('file_path'))}`
-    case 'Edit':
-    case 'Write':
-    case 'NotebookEdit':
-      return `Editing ${base(str('file_path') || str('notebook_path'))}`
-    case 'Grep':
-    case 'Glob':
-      return `Searching ${clip(str('pattern'))}`
-    case 'Skill':
-      return `Running /${clip(str('skill'))}`
-    case 'Agent':
-    case 'Task':
-      return `Delegating ${clip(str('description'))}`
-    case 'WebFetch':
-    case 'WebSearch':
-      return 'Browsing the web'
-    default:
-      return `Using ${tool.replace(/^mcp__/, '').replace(/__/g, ' ')}`
+export const MARK: Record<Segment['state'], string> = { done: '✓', now: '▸', todo: '○' }
+export const CALL_MARK: Record<Call['state'], string> = { running: '▸', ok: '✓', failed: '✗' }
+export const MARK_OF: Record<Turn['outcome'], string> = { answer: '✓', aborted: '✗', refusal: '✗', error: '✗' }
+
+// A line of spans and what sits at its right (a time): a row as the terminal draws it.
+export type Row = { spans: TextSpan[]; right?: TextSpan }
+
+// One call as a row: how it went, its kind's tag (the Activity page's), what it acted on, an
+// edit's size; how long it took at the right.
+export const callRowOf = (call: Call, c: Colors, tag?: TextSpan): Row => ({
+  spans: [
+    { text: `${CALL_MARK[call.state]} `, color: { running: c.accent, ok: c.ok, failed: c.hot }[call.state] },
+    ...(tag ? [tag] : []),
+    { text: call.kind === 'command' ? `$ ${call.target}` : call.target },
+    ...(call.added || call.removed ? [{ text: `  +${call.added ?? 0}`, color: c.ok }, { text: ` −${call.removed ?? 0}`, color: c.hot }] : []),
+  ],
+  right: { text: call.ms !== undefined ? took(call.ms) : '', dim: true },
+})
+
+// The popup's line: the latest call still running (main's or a subagent's), else thinking.
+export const lineOf = (a: Activity | null): string => a?.steps.at(-1)?.label ?? 'Thinking'
+
+type Card = { id: CallKind | 'tasks'; label: string; hotkey: string }
+
+// What the popup draws, half the band wide: the line, the facts at the top right (the task
+// list's count; the time on the terminal, which ticks), a card per kind of call and one for
+// the task list, and what the card held open lists.
+export const popupView = (
+  a: Activity | null,
+  list: readonly Section[],
+  open: CallKind | 'tasks' | null,
+  room: { bodyColumns: number; maxRows: number },
+  isTerminal: boolean,
+  now: number,
+) => {
+  const width = popupWidth(room.bodyColumns)
+  const inner = width - 4 // border and padding
+  const rows = Math.max(2, Math.min(6, room.maxRows - 7)) // what fits under the cards
+  const calls = a?.calls ?? []
+  const done = list.filter(s => s.status === 'completed').length
+  const cards: Card[] = [
+    ...cardCounts(calls).map(k => ({ id: k.kind, label: `${k.label} ${k.count}`, hotkey: k.hotkey })),
+    ...(list.length > 0 ? [{ id: 'tasks' as const, label: `Tasks ${done}/${list.length}`, hotkey: 't' }] : []),
+  ]
+  const shownOpen = cards.some(k => k.id === open) ? open : null
+  return {
+    width,
+    inner,
+    titleWidth: Math.floor(inner * 0.55),
+    line: lineOf(a),
+    task: list.find(s => s.status === 'in_progress'),
+    facts: [list.length > 0 ? `${done}/${list.length}` : '', a && isTerminal ? lasted(now - a.startedAt) : ''].filter(Boolean),
+    cards,
+    shownOpen,
+    opened: shownOpen && shownOpen !== 'tasks' ? latest(calls.filter(x => x.kind === shownOpen), rows) : null,
+    tasks: shownOpen === 'tasks' ? around(segments(list), rows) : [],
   }
 }
+
+// ── the chips' data, from what the session, git and gh answered ──
+
+// The chips that read git: with none of them shown, no refresh runs git.
+export const GIT_CHIPS: readonly ChipId[] = ['branch', 'tree', 'lines', 'commit', 'pr']
+
+type Usage = { startedAt: number; context: { percent?: number }; rateLimits: readonly RateWindow[]; cost?: { usd: number } }
+
+export const statusData = (s: { model: string; effort?: string; usage: Usage; git: GitInfo | null; cwd: string; repo: RepoInfo }): StatusData => ({
+  model: s.model,
+  effort: s.effort,
+  contextPercent: s.usage.context.percent,
+  rateLimits: s.usage.rateLimits.map(r => ({ kind: r.kind, percentUsed: r.percentUsed, resetsAt: r.resetsAt })),
+  git: s.git,
+  folder: s.cwd.split('/').pop() || s.cwd,
+  costUsd: s.usage.cost?.usd,
+  startedAt: s.usage.startedAt,
+  repo: s.repo,
+})
+
+// The repo chips' data but the PR's, each field only for a chip that is on: what the git
+// directory holds, `git diff --shortstat HEAD`, `git log -1`.
+export const repoOf = (wants: readonly ChipId[], out: { tree: Pick<RepoInfo, 'operation' | 'stashes'>; diff: string | null; log: string | null }): RepoInfo => ({
+  ...out.tree,
+  ...(out.diff !== null ? { lines: parseShortstat(out.diff) } : {}),
+  ...(wants.includes('commit') ? { commit: out.log === null ? null : parseCommit(out.log) } : {}),
+})
