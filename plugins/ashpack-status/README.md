@@ -2,7 +2,7 @@
 
 Status chips by the prompt, compact mode with a working popup, and an Activity page that keeps every turn's tool calls. Pages of the [AshPack](../ashpack) drawer.
 
-<p align="center"><img src="../../docs/ashpack-status.svg" alt="The status chips, compact mode's working popup, and the Status page" width="880"></p>
+<p align="center"><img src="../../docs/ashpack-status.svg" alt="The status chips, compact mode's working popup, the Status page and the Activity page" width="880"></p>
 
 ## Status chips
 
@@ -19,7 +19,7 @@ One row:
 | `ctx` `session` `week` | context used, and the usage windows, with `↻` time to reset |
 | `app · $1.24 · 23m` | folder, session cost, session time |
 
-Bars are green below 60%, amber below 85%, red from 85%. The chips refresh on a timer, on each prompt and turn, and when the model changes.
+Bars are green below 60%, amber below 85%, red from 85%. The chips refresh on a timer, on each prompt and turn, and when the model changes; a burst of these (a turn's end raises several) runs one refresh, and git runs only while a chip that shows the repo is on.
 
 ### Repo chips (off until you turn them on)
 
@@ -27,7 +27,7 @@ Four more chips show what is going on in the repo. Turn each on in the Status pa
 
 | Chip | Shows | From |
 | --- | --- | --- |
-| Working tree | `rebasing · 2 staged · 3 changed · 1 new · 1 conflict · 1 stash`, or `clean` | `git status`, the git directory, `git stash list` |
+| Working tree | `rebasing · 2 staged · 3 changed · 1 new · 1 conflict · 1 stash`, or `clean` | `git status` (with `git stash list` before git 2.35), the git directory |
 | Lines changed | `diff +120 −34`: the tree against `HEAD` (new files not counted) | `git diff --shortstat HEAD` |
 | Last commit | `commit 2h ago · fix: login redirect` | `git log -1` |
 | Pull request and checks | `PR #12 ✓ 5 checks · approved`; failing checks, running checks, draft, merged, changes asked | `gh pr view`, at most every 2 minutes; `no PR` without `gh` or a PR |
@@ -55,7 +55,9 @@ Hides tool calls, tool groups and progress pills. Replies and the spinner stay. 
 - A card per kind of call this turn, with its count: Read, Edit, Command, Search, Web, Agent, Skill, Tool, and Tasks for the task list.
 - Click a card to list its calls under the cards: the files read, the commands run (`✓` passed, `✗` failed, `▸` running) with how long each took, the files edited with `+N −M`, the tasks with `✓` `▸` `○`. Click it again to fold it. On the terminal, ctrl+x tab focuses the popup and a card's letter opens it (`r` `e` `c` `s` `w` `a` `k` `o` `t`).
 
-In the desktop app the popup takes the chips' place while Claude works, so the two never stack. Press ctrl+o to see everything.
+Above the prompt (the desktop app, and the terminal's main screen) the popup takes the chips' place while Claude works, so the two never stack; a fullscreen terminal keeps the chips under the prompt. When calls run side by side, the line shows the latest one still running.
+
+Compact mode hides the tool rows of the ctrl+o transcript too: a mod sees the same rows there and cannot tell the two views apart. To read every call, turn compact mode off (`/ashstatus compact`), or open the Activity page.
 
 ## Activity
 
@@ -64,11 +66,11 @@ The popup closes when the turn ends; the **Activity** page of the drawer keeps i
 ```
 ╭───────────────────────────────────────────────╮
 │ ● TURN 6 · WORKING                     1m 35s │
-│ Running npm test…                    ▂▄▆█▆▄▂▁ │
+│ Running npm test…                             │
 │ “build the activity page”                     │
 │ ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ │
 ╰───────────────────────────────────────────────╯
-All 9  Read 4  Edit 2  Command 3
+l: All 9  r: Read 4  e: Edit 2  c: Command 3
 ✓ READ  src/auth.ts                         0.1s
 ✓ EDIT  src/auth.ts  +12 −3                 1.2s
 ✗ RUN   $ npm test                          8.4s
@@ -88,13 +90,15 @@ TIMELINE ▂▅▁▃█▄
 
 That is the terminal. The desktop app draws the same page as cards: the turn in view with a coloured edge, a pulsing dot and the wave; its calls with a pill per kind; tiles for the session's numbers; the timeline as bars.
 
-- **The turn in view**: running, what it does now with the wave beside it and the prompt under it; done, the prompt with its time, calls, time spent in tools, cost and tokens. A bar splits its calls by kind, in a hue per kind.
-- **Its calls**: each with how it went, its kind, the file, command, search or page it acted on, an edit's `+N −M`, and how long it took. The filters above narrow them to one kind.
-- **This session**: session time, time working, turns, tool calls (and how many failed), lines added and removed across the files edited, spend, and the context's fill.
+- **The turn in view**: running, what it does now with the prompt under it (the desktop adds the wave; the terminal ticks the time once a second); done, the prompt with its time, calls, time spent in tools, cost and tokens. A bar splits its calls by kind, in a hue per kind.
+- **Its calls**: the latest 12, each with how it went, its kind, the file, command, search or page it acted on (its first 200 characters), an edit's `+N −M`, and how long it took. **Show more** lists 12 more. The filters above narrow them to one kind; a filter, or another turn, starts the list at 12 again.
+- **This session**: session time (from its first turn), time working, turns, tool calls (and how many failed), lines added and removed across the files edited, spend, and the context's fill.
 - **Timeline**: a bar per turn, as tall as the turn was long, split by kind.
 - **Turns**: the newest first. Click one to bring it into view; **← Back to now** follows the running turn again.
 
-The desktop app draws the cards as images, in the skin's colours when a skin is on, else light or dark as the app is. The page keeps the last 30 turns of the session; `/clear` and a new session start it over.
+On the terminal, with the drawer focused, a filter's letter picks it (`l` for All, then the cards' `r` `e` `c` `s` `w` `a` `k` `o`) and `b` is **Back to now**.
+
+The desktop app draws the cards as images, in the skin's colours when a skin is on, else light or dark as the app is. The page keeps the last 30 turns of the session, and the latest 500 calls of each; `/clear`, a resume and a new session start it over.
 
 ## Settings
 

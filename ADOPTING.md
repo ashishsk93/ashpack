@@ -28,6 +28,18 @@ on('ui.render', { component: 'Pane', requestId: 'ashpack' }, async ($, e, next) 
 
 The label is the tab. The host draws the page when its tab is open; its Buttons run your own handlers. Always return `below`, or the pages of the mods after yours are lost. `/ashpack hello` opens the drawer on your page.
 
+### Draw only while your tab is open
+
+The drawer runs every mod's page hook each time it redraws, whichever tab is open. A page that reads live state (a turn's progress, a timer) then redraws the whole drawer while another tab is up. The host keeps the tab in view as its own state, `{ plugin: 'ashpack', key: 'page' }`: the page's id, which is its label lower-cased (`hello`), or `home`. Read it, and while your tab is hidden return your keyed Box alone, so the host still lists the tab:
+
+```tsx
+// Another mod's state is not in your types: read it as unknown.
+const shown: unknown = (await $.state.get({ plugin: 'ashpack', key: 'page' } as never).catch(() => undefined))?.value
+const page = shown === 'hello' ? <Box key="ashpack-page:Hello">{await drawHello($, e)}</Box> : <Box key="ashpack-page:Hello" />
+```
+
+Reading the host's state while drawing subscribes your page to it, so the page draws in full when its tab opens. Catch your own page's errors and return the keyed Box: a hook that throws costs the drawer every page beneath it.
+
 ## A chip in the strip
 
 Hook the band above the prompt and put a Box keyed `ashpack-chip:<label>` in your tree. The host lifts it into the strip and draws the rest of your tree beneath, so the chip is drawn once:
@@ -65,7 +77,7 @@ A `ui.render` hook on `{ component: 'Pane', requestId: ['ashpack', 'hello'] }` t
 
 ## Plugin order
 
-Claude Code runs the plugins of the user tier in the order of `enabledPlugins` in `~/.claude/settings.json`. The first entry runs first, outermost. The host sees the pages and chips of the mods beneath it only, so `"ashpack@ashpack"` must be the first entry. When it is not, the drawer's Home page says so and offers `↑ move AshPack first`, which rewrites the order and puts `/reload-plugins` in the prompt box.
+Claude Code runs the plugins of the user tier in the order of `enabledPlugins` in `~/.claude/settings.json` (under `CLAUDE_CONFIG_DIR` when it is set). The first entry runs first, outermost. The host sees the pages and chips of the mods beneath it only, so `"ashpack@ashpack"` must be the first entry. When it is not, the drawer's Home page says so and offers `↑ move AshPack first`, which rewrites the order and puts `/reload-plugins` in the prompt box.
 
 ## Colors
 

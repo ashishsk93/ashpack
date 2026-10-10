@@ -39,13 +39,17 @@ async function checkOrder($: EngineInterface): Promise<void> {
   await update($, isMisplaced, () => misplaced(user.enabledPlugins))
 }
 
-// Moves the host to the front of enabledPlugins in ~/.claude/settings.json, then hands
-// the prompt box "/reload-plugins" to send.
+// Moves the host to the front of enabledPlugins in the user's settings.json (under
+// CLAUDE_CONFIG_DIR when set, else ~/.claude), reads it back to be sure, then hands the
+// prompt box "/reload-plugins" to send.
 async function fixOrder($: EngineInterface): Promise<void> {
   try {
-    const path = `${await $.env.get('HOME')}/.claude/settings.json`
+    const dir = (await $.env.get('CLAUDE_CONFIG_DIR')) || `${await $.env.get('HOME')}/.claude`
+    const path = `${dir}/settings.json`
     await $.fs.write(path, withHostFirst(await $.fs.read(path)))
-    await update($, isMisplaced, () => false)
+    const isStill = misplaced((JSON.parse(await $.fs.read(path)) as { enabledPlugins?: unknown }).enabledPlugins)
+    await update($, isMisplaced, () => isStill)
+    if (isStill) throw new Error(`${path} still lists another mod first`)
     $.ui.toast('AshPack is first in enabledPlugins. Press Enter to reload plugins.')
     await $.prompt.fill({ text: '/reload-plugins' })
   } catch (err) {
@@ -53,11 +57,12 @@ async function fixOrder($: EngineInterface): Promise<void> {
   }
 }
 
-// 0.9.5 moved the status chips and compact mode to ashpack-status: said once.
-async function noticeSplit($: EngineInterface): Promise<void> {
+// 0.9.5 moved the status chips and compact mode to ashpack-status: said once, and only to
+// someone who had the host before (it stored something); a fresh install never had them here.
+async function noticeSplit($: EngineInterface, hadHost: boolean): Promise<void> {
   if ((await $.store.get(NOTICE_KEY)) === true) return
   await $.store.set(NOTICE_KEY, true)
-  if ((await enabledOf($))[STATUS_MOD] === true) return
+  if (!hadHost || (await enabledOf($))[STATUS_MOD] === true) return
   $.ui.toast('AshPack 0.9.5: the status chips and compact mode are now the ashpack-status mod: /plugin install ashpack-status@ashpack', { timeoutMs: 12_000 })
 }
 
@@ -70,9 +75,15 @@ async function openDrawer($: EngineInterface, pageId?: string): Promise<void> {
   await $.ui.open({ id: DRAWER, title: 'AshPack', focus: true, closeOnEscape: true, columns: DRAWER_COLUMNS })
 }
 
-async function closeDrawer($: EngineInterface): Promise<void> {
-  await update($, drawerOpen, () => false)
+// The drawer's state folds once a close: here for the host's own, in the `ui.close` hook for
+// the person's (Esc, its close mark) or another mod's.
+async function foldDrawer($: EngineInterface): Promise<void> {
+  if (await read($, drawerOpen)) await update($, drawerOpen, () => false)
   await $.store.set(OPEN_KEY, false)
+}
+
+async function closeDrawer($: EngineInterface): Promise<void> {
+  await foldDrawer($)
   await $.ui.close({ id: DRAWER })
 }
 
@@ -154,11 +165,11 @@ export const register: Register = on => {
       description: 'Open the AshPack drawer, or a page of it: /ashpack skins',
       argumentHint: '[page|close]',
     })
-    const [storedPage, storedOpen] = await Promise.all([$.store.get(PAGE_KEY), $.store.get(OPEN_KEY)])
+    const [storedPage, storedOpen, stored] = await Promise.all([$.store.get(PAGE_KEY), $.store.get(OPEN_KEY), $.store.keys()])
     if (typeof storedPage === 'string') await update($, page, () => storedPage)
     const started = await next(e)
     await checkOrder($).catch(() => undefined)
-    void noticeSplit($).catch(() => undefined)
+    void noticeSplit($, stored.length > 0).catch(() => undefined)
     // The drawer comes back as it was left; opened unasked it waits for a wide terminal.
     if (storedOpen === true) await openDrawer($).catch(() => undefined)
     return started
@@ -175,12 +186,10 @@ export const register: Register = on => {
     return {}
   })
 
-  // The person closing the panel (Esc, its close mark) folds the drawer too.
+  // The person closing the panel (Esc, its close mark) folds the drawer too; the host's own
+  // close has folded it already.
   on('ui.close', async ($, e, next) => {
-    if (e.id === DRAWER) {
-      await update($, drawerOpen, () => false)
-      await $.store.set(OPEN_KEY, false)
-    }
+    if (e.id === DRAWER && next.origin.plugin !== 'ashpack') await foldDrawer($)
     return next(e)
   }).catch(($, e, next) => next(e))
 

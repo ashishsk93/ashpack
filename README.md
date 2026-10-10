@@ -52,7 +52,7 @@ The drawer (`◆ AshPack ▸` in the footer, or `/ashpack`), with **Home** and a
 
 ## ashpack-status · chips and compact mode
 
-<p align="center"><img src="docs/ashpack-status.svg" alt="The status chips, compact mode's working popup, and the Status page" width="880"></p>
+<p align="center"><img src="docs/ashpack-status.svg" alt="The status chips, compact mode's working popup, the Status page and the Activity page" width="880"></p>
 
 One row of chips: model, branch, context and usage, with segment bars that go green, amber, red. Four repo chips start off: the working tree, lines changed, the last commit, and the pull request with its checks. Compact mode folds the tool rows away and shows a popup with the work in progress, a wave loader beside the running step. The Activity page keeps every turn after the popup closes: the turn in view with its calls, the session's time, calls, lines and spend, a timeline, and a row per turn to bring back. [Read more.](plugins/ashpack-status/README.md)
 

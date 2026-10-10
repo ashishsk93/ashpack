@@ -1,45 +1,14 @@
 import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register, RenderInput, Timer } from 'claude-code'
 
-import type { Activity, Call, CallKind, ChipId, GitInfo, PullRequest, RepoInfo, Section, StatusData, Turn } from '../types'
-import { callsSvg, chartSvg, heroSvg, kindColor, lasted, mixCells, NO_HISTORY, pagePx, sessionTiles, shownOf, sparkCells, TAG, tilesSvg, turnFacts, turnLabel, turnOf, withTurn } from './activity'
-import type { Shown, Tile } from './activity'
-import type { Colors, Segment, TextSpan } from './format'
-import {
-  addTask,
-  around,
-  callOf,
-  cardCounts,
-  COLORS,
-  describeTool,
-  editSize,
-  barPx,
-  barSpans,
-  bar,
-  barSvg,
-  chipBarWidth,
-  CHIP_IDS,
-  chipOrder,
-  CHIPS,
-  hiddenChipsOf,
-  moveChip,
-  isBar,
-  latest,
-  levelColor,
-  operationOf,
-  parseCommit,
-  parseGit,
-  parsePr,
-  parseShortstat,
-  planFromTodos,
-  popupWidth,
-  segments,
-  statusChips,
-  took,
-  updateTask,
-  wave,
-  waveSvg,
-} from './format'
+import type { Activity, CallKind, ChipId, GitInfo, PullRequest, RepoInfo, Section, StatusData, Turn } from '../types'
+import type { ActivityView } from './activity'
+import { activityView, CALL_ROWS, callsSvg, chartSvg, contextRow, heroAlt, heroRows, heroSvg, kindColor, NO_HISTORY, pagePx, settleCall, startCall, SVG_ROWS, TAG } from './activity'
+import { tilesAlt, tilesSvg, timelineRow, turnLabel, turnOf, withTurn } from './activity'
+import type { Colors, Row, TextSpan } from './format'
+import { addTask, barPx, barSpans, barSvg, callOf, callRowOf, chipBarWidth, CHIP_IDS, chipOrder, CHIPS, chunks, COLORS, editSize, ellipsis, GIT_CHIPS } from './format'
+import { hiddenChipsOf, isBar, isColors, isListed, isUnderPrompt, MARK, moveChip, oneLine, operationOf, parseGit, parsePr, planFromTodos, popupView } from './format'
+import { printsStash, repoOf, statusChips, statusData, updateTask, wave, waveSvg } from './format'
 
 // AshPack Status. Everything that touches `$` lives in this one file (the engine
 // follows `$` only into functions of the same file):
@@ -54,7 +23,6 @@ const DRAWER = 'ashpack' // the AshPack drawer's pane, where Status is a page
 const PANE = 'ashpack-status' // the mod's own pane, for sessions without the host
 const ACTIVITY_PANE = 'ashpack-activity' // the Activity page's own pane, without the host
 const HOST_PAGE = { plugin: 'ashpack', key: 'page' } as const // the drawer's page in view
-const CALL_ROWS = 12 // calls the Activity page lists for a turn, the latest
 const HOST = 'ashpack@ashpack'
 const PANE_COLUMNS = 64
 const STATUS_TICK_MS = 30_000
@@ -64,8 +32,8 @@ const GIT_MS = 3000
 const GIT = ['git', '--no-optional-locks'] as const
 const GH_MS = 10_000
 const FRAME_MS = 120
-// ponytail: a longer turn counts its latest 500 calls on the Activity page; keep running tallies if that bites
-const MAX_CALLS = 500 // calls a turn keeps, the latest
+const SECOND_MS = 1000
+const PROMPT_CHARS = 200 // what a turn keeps of its prompt
 const LOADER_PX = 120 // the desktop loader's width, in CSS pixels
 const LOADER_CELLS = 12 // the terminal loader's width at most
 const BLUE = COLORS.blue
@@ -73,11 +41,12 @@ const COMPACT_KEY = 'compact' // $.store keys: toggles survive sessions
 const STATUS_KEY = 'statusOn'
 const CHIPS_KEY = 'hiddenChips'
 const ORDER_KEY = 'chipOrder'
-
-// The chips and the popup draw in the skin's palette when one is on; the loader in its
-// accent, else AshPack's blue.
-const loaderColor = async ($: EngineInterface): Promise<string> => (await skinColors($))?.accent ?? BLUE
-const colorsOf = async ($: EngineInterface): Promise<Colors> => (await skinColors($)) ?? COLORS
+const FRAME = { plugin: 'ashpack-status', key: 'frame' } as const
+const SECOND = { plugin: 'ashpack-status', key: 'second' } as const
+// The Skins mod's active palette (null while skins are off), and its accent alone, which a
+// Skins mod before 0.8 shares instead.
+const SKIN_PALETTE = { plugin: 'ashpack-skins', key: 'palette' } as const
+const SKIN_ACCENT = { plugin: 'ashpack-skins', key: 'accent' } as const
 
 const compact = atom({ plugin: 'ashpack-status', key: 'compact' } as const, false)
 const statusOn = atom({ plugin: 'ashpack-status', key: 'statusOn' } as const, true)
@@ -85,22 +54,22 @@ const hiddenChips = atom({ plugin: 'ashpack-status', key: 'hiddenChips' } as con
 const orderedChips = atom({ plugin: 'ashpack-status', key: 'orderedChips' } as const, [...CHIP_IDS])
 const activity = atom({ plugin: 'ashpack-status', key: 'activity' } as const, null as Activity | null)
 const openCard = atom({ plugin: 'ashpack-status', key: 'openCard' } as const, null as CallKind | 'tasks' | null)
-const frame = atom({ plugin: 'ashpack-status', key: 'frame' } as const, 0)
+const frame = atom(FRAME, 0)
+const second = atom(SECOND, 0)
 const status = atom({ plugin: 'ashpack-status', key: 'status' } as const, null as StatusData | null)
 const plan = atom({ plugin: 'ashpack-status', key: 'plan' } as const, [] as Section[])
 const history = atom({ plugin: 'ashpack-status', key: 'history' } as const, NO_HISTORY)
 const shownTurn = atom({ plugin: 'ashpack-status', key: 'shownTurn' } as const, null as number | null)
 const callFilter = atom({ plugin: 'ashpack-status', key: 'callFilter' } as const, 'all' as CallKind | 'all')
+const callLimit = atom({ plugin: 'ashpack-status', key: 'callLimit' } as const, CALL_ROWS)
 
 // ── status rows: data ────────────────────────────────────────────────────────
 
-type Seen = { effort?: string }
-
 // Effort arrives only on the classic hook inputs, so the grid shows what the
 // last one said. (The permission mode is the engine's own hint line, just below.)
-let seen: Seen = {}
+let effort: string | undefined
 const see = (e: { effort?: { level: string } }): void => {
-  seen = { effort: e.effort?.level ?? seen.effort }
+  effort = e.effort?.level ?? effort
 }
 
 // A command's output, or null when it failed or is not installed. In the C locale, so git's
@@ -114,11 +83,6 @@ async function run($: EngineInterface, argv: readonly string[], timeoutMs = GIT_
   }
 }
 
-async function gitInfo($: EngineInterface) {
-  const out = await run($, [...GIT, 'status', '--porcelain=v2', '--branch'])
-  return out === null ? null : parseGit(out)
-}
-
 // The last PR answer, per branch, kept as its promise so refreshes that overlap share one
 // `gh` call: GitHub is asked again only after PR_TTL_MS.
 let prSeen: { branch: string; at: number; pr: Promise<PullRequest | null> } | undefined
@@ -130,80 +94,104 @@ function pullRequest($: EngineInterface, branch: string, now: number): Promise<P
   return pr
 }
 
-async function treeExtras($: EngineInterface): Promise<Pick<RepoInfo, 'operation' | 'stashes'>> {
-  const [dir, stash] = await Promise.all([run($, [...GIT, 'rev-parse', '--absolute-git-dir']), run($, [...GIT, 'stash', 'list'])])
-  const names = dir ? await $.fs.list(dir.trim()).then(list => list.map(f => f.name), () => []) : []
-  return { operation: operationOf(names), stashes: stash === null ? 0 : stash.split('\n').filter(Boolean).length }
+// The git directory, per folder: it does not move under a session, so it is asked once.
+let gitDir: { cwd: string; dir: string } | undefined
+// `git status` prints the stashes from git 2.35 on, and no line for none; an older git is
+// asked with `git stash list`. Its version is asked once.
+let isStashPrinted: Promise<boolean> | undefined
+
+async function stashCount($: EngineInterface, git: GitInfo): Promise<number> {
+  if (git.stashes !== undefined) return git.stashes
+  isStashPrinted ??= run($, [...GIT, 'version']).then(out => printsStash(out ?? ''))
+  if (await isStashPrinted) return 0
+  const out = await run($, [...GIT, 'stash', 'list'])
+  return out === null ? 0 : out.split('\n').filter(Boolean).length
 }
 
-// What the extra repo chips read, fetched only for the chips that are on.
-async function repoInfo($: EngineInterface, git: GitInfo | null, wants: readonly ChipId[], now: number): Promise<RepoInfo> {
-  if (!git) return {}
-  const [tree, diff, log, pr] = await Promise.all([
-    wants.includes('tree') ? treeExtras($) : {},
-    wants.includes('lines') ? run($, [...GIT, 'diff', '--shortstat', 'HEAD']) : null,
-    wants.includes('commit') ? run($, [...GIT, 'log', '-1', '--format=%ct%x1f%s']) : null,
-    wants.includes('pr') ? pullRequest($, git.branch, now) : undefined,
-  ])
-  return {
-    ...tree,
-    ...(diff !== null ? { lines: parseShortstat(diff) } : {}),
-    ...(wants.includes('commit') ? { commit: log === null ? null : parseCommit(log) } : {}),
-    ...(pr !== undefined ? { pr } : {}),
-  }
+// The working tree's extras: an operation under way (named by what the git directory holds), the stashes.
+async function treeExtras($: EngineInterface, cwd: string, git: GitInfo): Promise<Pick<RepoInfo, 'operation' | 'stashes'>> {
+  const [dir, stashes] = await Promise.all([gitDir?.cwd === cwd ? gitDir.dir : run($, [...GIT, 'rev-parse', '--absolute-git-dir']).then(out => out?.trim()), stashCount($, git)])
+  if (dir) gitDir = { cwd, dir }
+  const names = dir ? await $.fs.list(dir).then(list => list.map(f => f.name), () => []) : []
+  return { operation: operationOf(names), stashes }
 }
 
-async function seenFromSettings($: EngineInterface): Promise<Seen> {
-  const s = await $.settings.read()
-  return { effort: typeof s.effortLevel === 'string' ? s.effortLevel : undefined }
+// Applies `change` to the chips' data as held by now, so a late answer never undoes a newer
+// one; written only on a change, since every write makes the desktop app re-lay out the transcript.
+async function writeStatus($: EngineInterface, change: (held: StatusData | null) => StatusData | null): Promise<void> {
+  const held = await read($, status)
+  if (JSON.stringify(change(held)) !== JSON.stringify(held)) await update($, status, change)
 }
 
 async function loadStatus($: EngineInterface): Promise<void> {
-  const [model, usage, git, cwd, isOn, hidden, now] = await Promise.all([
-    $.session.model(),
-    $.session.usage(),
-    gitInfo($),
-    $.session.cwd(),
-    read($, statusOn),
-    read($, hiddenChips),
-    $.clock.now(),
-  ])
-  const held = await read($, status)
-  const data: StatusData = {
-    model,
-    effort: seen.effort,
-    contextPercent: usage.context.percent,
-    rateLimits: usage.rateLimits.map(r => ({ kind: r.kind, percentUsed: r.percentUsed, resetsAt: r.resetsAt })),
-    git,
-    folder: cwd.split('/').pop() || cwd,
-    costUsd: usage.cost?.usd,
-    startedAt: usage.startedAt,
-    repo: held?.repo ?? {},
-  }
-  // Only a change is written: every write makes the desktop app re-lay out the transcript.
-  if (JSON.stringify(held) !== JSON.stringify(data)) await update($, status, () => data)
-  // The repo chips' data after, so a slow `gh` never holds up the other chips. It joins
-  // whatever the chips hold by then, so an older refresh cannot undo a newer one's.
+  const [isOn, hidden, held] = await Promise.all([read($, statusOn), read($, hiddenChips), read($, status)])
   const wants = isOn ? CHIP_IDS.filter(id => !hidden.includes(id)) : []
-  const repo = await repoInfo($, git, wants, now)
-  const latest = await read($, status)
-  if (latest && JSON.stringify(latest.repo) !== JSON.stringify(repo)) await update($, status, s => s && { ...s, repo })
+  // Git runs only for a chip that shows the repo; the Activity page's tiles read the usage alone.
+  const readsGit = wants.some(id => GIT_CHIPS.includes(id))
+  const porcelain = readsGit ? run($, [...GIT, 'status', '--porcelain=v2', '--branch', '--show-stash']).then(out => (out === null ? null : parseGit(out))) : (held?.git ?? null)
+  const [model, usage, cwd, now, git] = await Promise.all([$.session.model(), $.session.usage(), $.session.cwd(), $.clock.now(), porcelain])
+  await writeStatus($, s => statusData({ model, effort, usage, git, cwd, repo: s?.repo ?? {} }))
+  if (!readsGit) return
+  if (!git) return writeStatus($, s => s && { ...s, repo: {} })
+  // The repo chips' data after, so they never hold up the others; the PR's last, when `gh`
+  // answers, since it may take seconds.
+  const [tree, diff, log] = await Promise.all([
+    wants.includes('tree') ? treeExtras($, cwd, git) : {},
+    wants.includes('lines') ? run($, [...GIT, 'diff', '--shortstat', 'HEAD']) : null,
+    wants.includes('commit') ? run($, [...GIT, 'log', '-1', '--format=%ct%x1f%s']) : null,
+  ])
+  const repo = repoOf(wants, { tree, diff, log })
+  const hasPr = wants.includes('pr')
+  await writeStatus($, s => s && { ...s, repo: { ...repo, ...(hasPr && s.repo.pr !== undefined ? { pr: s.repo.pr } : {}) } })
+  if (!hasPr) return
+  void pullRequest($, git.branch, now)
+    .then(pr => writeStatus($, s => (s?.git?.branch === git.branch ? { ...s, repo: { ...s.repo, pr } } : s)))
+    .catch(err => $.ui.log(`ashpack status PR: ${String(err)}`, { to: 'debug' }))
 }
 
-// Never lets the status rows break the event they ride on.
+let isLoading = false // a load runs: a refresh asked meanwhile waits for it
+let isAskedAgain = false // one was: one more load once it ends, for what changed since it read
+let statusTimer: Timer | undefined // the 30 s refresh
+
+// Never lets the status rows break the event they ride on. One load at a time, so they write
+// in order, and the asks of a turn's end (four events) fold into one more load.
 function refreshStatus($: EngineInterface): void {
-  void loadStatus($).catch(err => $.ui.log(`ashpack status: ${String(err)}`, { to: 'debug' }))
+  if (isLoading) {
+    isAskedAgain = true
+    return
+  }
+  isLoading = true
+  void loadStatus($)
+    .catch(err => $.ui.log(`ashpack status: ${String(err)}`, { to: 'debug' }))
+    .finally(() => {
+      isLoading = false
+      if (!isAskedAgain) return
+      isAskedAgain = false
+      refreshStatus($)
+    })
 }
-
-// Where the status chips go: under the prompt (PromptHint) on the fullscreen terminal,
-// above it (AbovePrompt) everywhere else. The desktop reports fullscreen, since it docks
-// panes, but draws no mod tree under its prompt; its footer is a one-line strip that
-// truncates, so the chips cannot go there either. In the band, the working popup takes
-// the chips' place while Claude works, so the two never stack.
-const isUnderPrompt = (e: { surface: string; viewport?: { isFullscreen?: boolean } }): boolean =>
-  e.surface === 'terminal' && e.viewport?.isFullscreen === true
 
 type StatusSite = RenderInput<'PromptHint'> | RenderInput<'AbovePrompt'>
+type PaneInput = RenderInput<'Pane'>
+type Site = StatusSite | PaneInput
+
+// A span of text, as a chip, a row or the Activity page draws it.
+function spanText($: EngineInterface, e: Site, sp: TextSpan, key: string) {
+  const { Text } = $.ui.resolve(e)
+  return <Text key={key} color={sp.color} dimColor={sp.dim} bold={sp.bold}>{sp.text}</Text>
+}
+
+// A row: its spans cut to fit (in `width` when given), what sits at its right after them.
+function rowView($: EngineInterface, e: Site, row: Row, key: string, width?: number) {
+  const { Box, Text } = $.ui.resolve(e)
+  const spans = <Text wrap="truncate-end">{row.spans.map((sp, i) => spanText($, e, sp, `${key}-${i}`))}</Text>
+  return (
+    <Box key={key} justifyContent="space-between" columnGap={1}>
+      {width === undefined ? spans : <Box width={width}>{spans}</Box>}
+      {row.right ? spanText($, e, row.right, `${key}-right`) : null}
+    </Box>
+  )
+}
 
 // The chips as a tree. The desktop: one strip, the bars as images (its font sets the
 // segment glyphs at odd heights), wide gaps between the chips. The terminal: a spaced
@@ -214,11 +202,6 @@ function drawChips($: EngineInterface, e: StatusSite, data: StatusData, now: num
   const chips = statusChips(data, now, chipBarWidth(total), colors, isTerminal, shown)
   // Svg is not in the terminal's table: resolved only off it.
   const Svg = e.surface === 'terminal' ? null : $.ui.resolve(e).Svg
-  const text = (sp: TextSpan, key: string) => (
-    <Text key={key} color={sp.color} dimColor={sp.dim} bold={sp.bold}>
-      {sp.text}
-    </Text>
-  )
   return (
     <Box flexWrap="wrap" columnGap={isTerminal ? 2 : 3} rowGap={isTerminal ? 0 : 1}>
       {chips.map(({ id, cell }, c) => (
@@ -226,8 +209,8 @@ function drawChips($: EngineInterface, e: StatusSite, data: StatusData, now: num
         <Box key={`ashpack-chip:${id}`} alignItems="center">
           {cell.map((sp, i) => {
             const key = `cell-${c}-${i}`
-            if (!isBar(sp)) return text(sp, key)
-            if (isTerminal || !Svg) return <Text key={key}>{barSpans(sp).map((t, j) => text(t, `${key}-${j}`))}</Text>
+            if (!isBar(sp)) return spanText($, e, sp, key)
+            if (isTerminal || !Svg) return <Text key={key}>{barSpans(sp).map((t, j) => spanText($, e, t, `${key}-${j}`))}</Text>
             return <Svg key={key} source={barSvg(sp.bar, sp.width, sp.color)} alt={`${Math.round(sp.bar)}%`} width={barPx(sp.width)} height={7} />
           })}
         </Box>
@@ -242,19 +225,52 @@ async function statusInputs($: EngineInterface): Promise<[boolean, StatusData | 
   return [isOn, data, now, colors, order.filter(id => !hidden.includes(id))]
 }
 
+// The skin's colours, or null with no Skins mod or skins off. Reading them while drawing
+// redraws the site when the skin changes; a draw reads them once.
+async function skinColors($: EngineInterface): Promise<Colors | null> {
+  const [palette, accent] = await Promise.all([$.state.get(SKIN_PALETTE as never).catch(() => undefined), $.state.get(SKIN_ACCENT as never).catch(() => undefined)])
+  if (isColors(palette?.value)) return palette.value
+  const a: unknown = accent?.value
+  return typeof a === 'string' && a !== '' ? { ...COLORS, accent: a } : null
+}
+
+// The chips, the popup and the Activity page draw in the skin's palette when one is on, else AshPack's own.
+const colorsOf = async ($: EngineInterface): Promise<Colors> => (await skinColors($)) ?? COLORS
+
 // ── compact mode ─────────────────────────────────────────────────────────────
 
-let ticker: Timer | undefined
-let terminalSeen = false // a terminal has drawn: the frame ticker has a reader
+let frames: Timer | undefined // the terminal popup's wave
+let seconds: Timer | undefined // the terminal Activity page's running time
+let terminalSeen = false // a terminal has drawn: the wave has a reader
+// The history's turn count, kept here so a turn's start reads no history; read once after a
+// load (a hot reload keeps the history, not this).
+let turnCount: number | undefined
 
-function stopTicker(): void {
-  ticker?.cancel()
-  ticker = undefined
+// A timer that bumps a counter, which draws again whatever reads it. The timer is the
+// counter's only writer, so it writes straight, no read first.
+function ticking($: EngineInterface, ms: number, write: (n: number) => Promise<unknown>): Timer {
+  let n = 0
+  return $.clock.every(ms, () => void write((n = (n + 1) % 100_000)))
+}
+
+const stop = (timer: Timer | undefined): undefined => void timer?.cancel()
+
+// The popup's wave moves on the terminal alone (the desktop's animates itself), and only
+// while compact mode is on and a turn runs: nothing else reads it.
+async function syncFrames($: EngineInterface): Promise<void> {
+  const isWanted = terminalSeen && (await read($, compact)) && (await read($, activity)) !== null
+  frames = isWanted ? (frames ?? ticking($, FRAME_MS, n => $.state.set(FRAME, n))) : stop(frames)
+}
+
+// The terminal Activity page ticks a running turn's time once a second while it shows it.
+function tickSeconds($: EngineInterface, isWanted: boolean): void {
+  seconds = isWanted ? (seconds ?? ticking($, SECOND_MS, n => $.state.set(SECOND, n))) : stop(seconds)
 }
 
 async function resetActivity($: EngineInterface): Promise<void> {
-  stopTicker()
-  await update($, activity, () => null)
+  frames = stop(frames)
+  tickSeconds($, false)
+  if ((await read($, activity)) !== null) await update($, activity, () => null)
 }
 
 // The turn that just ended joins the Activity page's history and the session's totals.
@@ -264,45 +280,16 @@ async function recordTurn($: EngineInterface, e: { durationMs: number; reason: T
   const usage = await $.session.usage().catch(() => null)
   const costUsd = a.costAtStart !== undefined && usage?.cost ? usage.cost.usd - a.costAtStart : undefined
   const turn = turnOf(a, { ms: e.durationMs, outcome: e.reason, ...(costUsd !== undefined ? { costUsd } : {}), ...(e.usage ? { usage: e.usage } : {}) })
-  await update($, history, h => withTurn(h, turn))
+  turnCount = (await update($, history, h => withTurn(h, turn))).totals.turns
 }
 
-// A /clear starts the Activity page over (no session.start fires for it).
+// A /clear or a resume starts the Activity page over: the process goes on as another
+// session, and no session.start fires for it.
 async function clearHistory($: EngineInterface): Promise<void> {
   await resetActivity($)
-  await Promise.all([update($, history, () => NO_HISTORY), update($, shownTurn, () => null), update($, callFilter, () => 'all')])
+  await Promise.all([update($, history, () => NO_HISTORY), update($, shownTurn, () => null), showCalls($, 'all')])
+  turnCount = 0
 }
-
-function isCompact($: EngineInterface): Promise<boolean> {
-  return read($, compact)
-}
-
-const seconds = (ms: number): string => {
-  const s = Math.max(0, Math.floor(ms / 1000))
-  return s < 60 ? `${s}s` : `${Math.floor(s / 60)}m ${s % 60}s`
-}
-
-// The Skins mod's active palette (null while skins are off), and its accent alone, which a
-// Skins mod before 0.8 shares instead.
-const SKIN_PALETTE = { plugin: 'ashpack-skins', key: 'palette' } as const
-const SKIN_ACCENT = { plugin: 'ashpack-skins', key: 'accent' } as const
-
-const isColors = (v: unknown): v is Colors =>
-  typeof v === 'object' && v !== null && Object.keys(COLORS).every(k => typeof (v as Record<string, unknown>)[k] === 'string')
-
-// The skin's colours, or null with no Skins mod or skins off. Reading them while drawing
-// redraws the site when the skin changes.
-async function skinColors($: EngineInterface): Promise<Colors | null> {
-  const [palette, accent] = await Promise.all([
-    $.state.get(SKIN_PALETTE as never).catch(() => undefined),
-    $.state.get(SKIN_ACCENT as never).catch(() => undefined),
-  ])
-  if (isColors(palette?.value)) return palette.value
-  const a: unknown = accent?.value
-  return typeof a === 'string' && a !== '' ? { ...COLORS, accent: a } : null
-}
-
-
 
 // The running section's loader: redrawn per frame on the terminal; an SVG that
 // animates itself elsewhere, so the desktop never redraws for it.
@@ -312,153 +299,105 @@ function loader($: EngineInterface, e: RenderInput<'AbovePrompt'>, f: number, ce
     return <Svg key="loader" source={waveSvg(color, LOADER_PX)} alt="Working" />
   }
   const { Text } = $.ui.resolve(e)
-  return (
-    <Text key="loader" color={color}>
-      {wave(f, Math.min(cells, LOADER_CELLS))}
-    </Text>
-  )
-}
-
-const MARK: Record<Segment['state'], string> = { done: '✓', now: '▸', todo: '○' }
-const CALL_MARK: Record<Call['state'], string> = { running: '▸', ok: '✓', failed: '✗' }
-
-// One call of an open card: its mark, what it acted on (an edit's size), how long it took;
-// on the Activity page, its kind's tag after the mark.
-function callRow($: EngineInterface, e: RenderInput<'AbovePrompt'> | PaneInput, c: Colors, call: Call, inner: number, tag?: TextSpan) {
-  const { Box, Text } = $.ui.resolve(e)
-  const color = { running: c.accent, ok: c.ok, failed: c.hot }[call.state]
-  const time = call.ms !== undefined ? took(call.ms) : ''
-  return (
-    <Box key={`call-${call.id}`} justifyContent="space-between" columnGap={1}>
-      <Box width={Math.max(10, inner - 8)}>
-        <Text wrap="truncate-end">
-          <Text color={color}>{CALL_MARK[call.state]} </Text>
-          {tag ? <Text color={tag.color}>{tag.text}</Text> : null}
-          <Text>{call.kind === 'command' ? `$ ${call.target}` : call.target}</Text>
-          {call.added || call.removed ? <Text color={c.ok}>{`  +${call.added ?? 0}`}</Text> : null}
-          {call.added || call.removed ? <Text color={c.hot}>{` −${call.removed ?? 0}`}</Text> : null}
-        </Text>
-      </Box>
-      <Text dimColor>{time}</Text>
-    </Box>
-  )
+  return <Text key="loader" color={color}>{wave(f, Math.min(cells, LOADER_CELLS))}</Text>
 }
 
 // The working popup, half the band wide: the running step with the loader beside it, then a
 // card per kind of call (`Read 4`, `Command 3`) and one for the task list. A card pressed
 // open lists its calls (or the tasks) under the cards; pressed again, it folds.
-async function drawPopup($: EngineInterface, e: RenderInput<'AbovePrompt'>, a: Activity | null, now: number) {
+async function drawPopup($: EngineInterface, e: RenderInput<'AbovePrompt'>) {
   const { Box, Button, Text } = $.ui.resolve(e)
   const isTerminal = e.surface === 'terminal'
   // Reading `frame` redraws per tick: the terminal only.
-  const [list, f, color, c, open] = await Promise.all([read($, plan), isTerminal ? read($, frame) : 0, loaderColor($), colorsOf($), read($, openCard)])
-  const width = popupWidth(e.props.bodyColumns)
-  const inner = width - 4 // border and padding
-  const titleWidth = Math.floor(inner * 0.55)
-  const calls = a?.calls ?? []
-  const done = list.filter(s => s.status === 'completed').length
-  const task = list.find(s => s.status === 'in_progress')
-  const rows = Math.max(2, Math.min(6, e.props.maxRows - 7)) // what fits under the cards
-  const facts = [list.length > 0 ? `${done}/${list.length}` : '', a && isTerminal ? seconds(now - a.startedAt) : ''].filter(Boolean) // the desktop draws no ticks, so the time would stand still
-  const cards = [
-    ...cardCounts(calls).map(k => ({ id: k.kind as CallKind | 'tasks', label: `${k.label} ${k.count}`, hotkey: k.hotkey })),
-    ...(list.length > 0 ? [{ id: 'tasks' as const, label: `Tasks ${done}/${list.length}`, hotkey: 't' }] : []),
-  ]
-  const shownOpen = cards.some(k => k.id === open) ? open : null
-  const opened = shownOpen && shownOpen !== 'tasks' ? latest(calls.filter(x => x.kind === shownOpen), rows) : null
+  const [a, list, open, skin, f, now] = await Promise.all([read($, activity), read($, plan), read($, openCard), skinColors($), isTerminal ? read($, frame) : 0, $.clock.now()])
+  const c = skin ?? COLORS
+  const v = popupView(a, list, open, e.props, isTerminal, now)
   return (
-    <Box flexDirection="column" borderStyle="round" borderColor={c.accent} paddingX={1} width={width}>
+    <Box flexDirection="column" borderStyle="round" borderColor={c.accent} paddingX={1} width={v.width}>
       <Box justifyContent="space-between" columnGap={2}>
         <Text wrap="truncate-end">
-          <Text bold color={c.accent}>
-            ◆ AshPack
-          </Text>
-          {task ? <Text dimColor> {task.title}</Text> : null}
+          <Text bold color={c.accent}>◆ AshPack</Text>
+          {v.task ? <Text dimColor> {v.task.title}</Text> : null}
         </Text>
-        <Text dimColor>{facts.join(' · ')}</Text>
+        <Text dimColor>{v.facts.join(' · ')}</Text>
       </Box>
       <Box columnGap={1}>
-        <Box width={titleWidth}>
-          <Text wrap="truncate-end" bold color={c.accent}>
-            ▸ {a?.label ?? 'Thinking'}…
-          </Text>
+        <Box width={v.titleWidth}>
+          <Text wrap="truncate-end" bold color={c.accent}>▸ {v.line}…</Text>
         </Box>
-        {loader($, e, f, inner - titleWidth - 1, color)}
+        {loader($, e, f, v.inner - v.titleWidth - 1, skin?.accent ?? BLUE)}
       </Box>
-      {cards.length > 0 ? (
+      {v.cards.length > 0 ? (
         <Box flexWrap="wrap" columnGap={2}>
-          {cards.map(k => (
+          {v.cards.map(k => (
             <Button
               key={`card-${k.id}`}
               plain
               {...(isTerminal ? { hotkey: k.hotkey } : {})}
-              dimColor={shownOpen !== null && shownOpen !== k.id}
-              label={shownOpen === k.id ? `${k.label} ▾` : k.label}
+              dimColor={v.shownOpen !== null && v.shownOpen !== k.id}
+              label={v.shownOpen === k.id ? `${k.label} ▾` : k.label}
               onPress={() => update($, openCard, o => (o === k.id ? null : k.id))}
             />
           ))}
         </Box>
       ) : null}
-      {opened && opened.earlier > 0 ? <Text dimColor>{`  +${opened.earlier} earlier`}</Text> : null}
-      {opened ? opened.shown.map(call => callRow($, e, c, call, inner)) : null}
-      {shownOpen === 'tasks'
-        ? around(segments(list), rows).map((s, i) => (
-            <Text key={`task-${i}`} wrap="truncate-end" bold={s.state === 'now'} color={s.state === 'now' ? c.accent : s.state === 'done' ? c.ok : undefined} dimColor={s.state === 'todo'}>
-              {MARK[s.state]} {s.title}
-            </Text>
-          ))
-        : null}
+      {v.opened && v.opened.earlier > 0 ? <Text dimColor>{`  +${v.opened.earlier} earlier`}</Text> : null}
+      {v.opened ? v.opened.shown.map(call => rowView($, e, callRowOf(call, c), `call-${call.id}`, Math.max(10, v.inner - 8))) : null}
+      {v.tasks.map((s, i) => (
+        <Text key={`task-${i}`} wrap="truncate-end" bold={s.state === 'now'} color={s.state === 'now' ? c.accent : s.state === 'done' ? c.ok : undefined} dimColor={s.state === 'todo'}>
+          {MARK[s.state]} {s.title}
+        </Text>
+      ))}
     </Box>
   )
 }
 
 // ── the Activity page ────────────────────────────────────────────────────────
 
-// Everything the page reads, in one go. The terminal ticks the running turn's time and
-// wave by `frame`; the desktop's wave animates itself, so it never redraws for them.
-async function activityInputs($: EngineInterface, e: PaneInput) {
-  const [held, { turns: list, totals: t }, picked, filter, data, c, now] = await Promise.all([
-    read($, activity),
-    read($, history),
-    read($, shownTurn),
-    read($, callFilter),
-    read($, status),
-    colorsOf($),
-    $.clock.now(),
-  ])
-  // The ended turn joins the history a write before the live one clears: not counted twice.
-  const a = held && held.n > t.turns ? held : null
-  // A turn picked that has since left the history is no pick.
-  const pick = list.some(x => x.n === picked) ? picked : null
-  const shown = shownOf(a, list, pick)
-  const f = e.surface === 'terminal' && shown?.isLive ? await read($, frame) : 0
-  const kinds = shown ? cardCounts(shown.calls) : []
-  const kind = kinds.some(k => k.kind === filter) ? filter : 'all'
-  const { shown: calls, earlier } = latest(shown ? shown.calls.filter(x => kind === 'all' || x.kind === kind) : [], CALL_ROWS)
-  const bars = [...list, ...(a ? [{ n: a.n, prompt: a.prompt, ms: Math.max(0, now - a.startedAt), calls: a.calls, isLive: true }] : [])]
-  return { a, pick, shown, kind, kinds, calls, earlier, bars, c, now, f, tiles: sessionTiles(t, a, now, c, data?.startedAt, data?.costUsd), context: data?.contextPercent }
+// Everything the page reads, in one go. The terminal ticks a running turn's time once a
+// second (`second`); the desktop's wave animates itself, so it never redraws for it.
+async function activityInputs($: EngineInterface, e: PaneInput): Promise<ActivityView> {
+  const [held, h, picked, filter, limit, data, c, now] = await Promise.all([read($, activity), read($, history), read($, shownTurn), read($, callFilter), read($, callLimit), read($, status), colorsOf($), $.clock.now()])
+  const v = activityView({ held, history: h, picked, filter, limit, data, c, now })
+  const isTicking = e.surface === 'terminal' && v.shown?.isLive === true
+  tickSeconds($, isTicking)
+  if (isTicking) await read($, second)
+  return v
 }
-
-type ActivityView = Awaited<ReturnType<typeof activityInputs>>
 
 async function showTurn($: EngineInterface, n: number | null): Promise<void> {
   // Only a change is written: each write redraws.
   if ((await read($, shownTurn)) !== n) await update($, shownTurn, () => n)
-  if ((await read($, callFilter)) !== 'all') await update($, callFilter, () => 'all')
+  await showCalls($, 'all')
 }
 
-// The kinds of the turn in view as filters for its calls (All first); the one on, bright.
+// The calls in view under a filter, the latest CALL_ROWS of them again.
+async function showCalls($: EngineInterface, filter: CallKind | 'all'): Promise<void> {
+  const [held, limit] = await Promise.all([read($, callFilter), read($, callLimit)])
+  if (held !== filter) await update($, callFilter, () => filter)
+  if (limit !== CALL_ROWS) await update($, callLimit, () => CALL_ROWS)
+}
+
+// The kinds of the turn in view as filters for its calls (All first); the one on, bright. On
+// the terminal each has a key: its card's letter, `l` for All.
 function callFilters($: EngineInterface, e: PaneInput, v: ActivityView) {
   const { Box, Button } = $.ui.resolve(e)
   if (!v.shown || v.kinds.length === 0) return null
-  const all = { id: 'all' as const, label: `All ${v.shown.calls.length}` }
+  const all = { id: 'all' as const, label: `All ${v.shown.calls.length}`, hotkey: 'l' }
   return (
     <Box key="activity-filters" flexWrap="wrap" columnGap={2}>
-      {[all, ...v.kinds.map(k => ({ id: k.kind, label: `${k.label} ${k.count}` }))].map(k => (
-        <Button key={`filter-${k.id}`} plain dimColor={k.id !== v.kind} label={k.label} onPress={() => update($, callFilter, () => k.id)} />
+      {[all, ...v.kinds.map(k => ({ id: k.kind, label: `${k.label} ${k.count}`, hotkey: k.hotkey }))].map(k => (
+        <Button key={`filter-${k.id}`} plain {...(e.surface === 'terminal' ? { hotkey: k.hotkey } : {})} dimColor={k.id !== v.kind} label={k.label} onPress={() => showCalls($, k.id)} />
       ))}
     </Box>
   )
+}
+
+// The calls before the ones listed, as a button that lists CALL_ROWS more.
+function moreCalls($: EngineInterface, e: PaneInput, v: ActivityView) {
+  const { Button } = $.ui.resolve(e)
+  const label = `+ ${v.earlier} earlier · show ${Math.min(CALL_ROWS, v.earlier)} more`
+  return v.earlier > 0 ? <Button key="activity-more" plain dimColor label={label} onPress={() => update($, callLimit, n => n + CALL_ROWS)} /> : null
 }
 
 // Every kept turn, the newest first, each a button that brings it into view.
@@ -468,179 +407,120 @@ function turnRows($: EngineInterface, e: PaneInput, v: ActivityView, chars: numb
     <Box key="activity-turns" flexDirection="column">
       {[...v.bars].reverse().map(b => {
         const isLive = 'isLive' in b
-        const inView = b.n === v.shown?.n
-        return (
-          <Button
-            key={`turn-${b.n}`}
-            plain
-            dimColor={!inView}
-            label={`${inView ? '▸' : isLive ? '●' : ' '} ${turnLabel({ ...b, ms: isLive ? undefined : b.ms }, chars - 2)}`}
-            onPress={() => showTurn($, isLive ? null : b.n)}
-          />
-        )
+        const mark = b.n === v.shown?.n ? '▸' : isLive ? '●' : ' '
+        return <Button key={`turn-${b.n}`} plain dimColor={b.n !== v.shown?.n} label={`${mark} ${turnLabel({ ...b, ms: isLive ? undefined : b.ms }, chars - 2)}`} onPress={() => showTurn($, isLive ? null : b.n)} />
       })}
-    </Box>
-  )
-}
-
-const heroAlt = (s: Shown | null): string =>
-  !s ? 'No turns yet' : s.isLive ? `Turn ${s.n}, working: ${s.label}` : `Turn ${s.n}, ${s.outcome ?? 'answer'}: ${s.prompt}. ${turnFacts(s).join(', ')}`
-
-const tilesAlt = (tiles: readonly Tile[]): string => tiles.map(t => `${t.label} ${t.value.map(x => x.text).join('')}${t.sub ? ` (${t.sub.text})` : ''}`).join(', ')
-
-// The desktop: SVG cards (the head, the calls, the tiles, the chart), the filters and the
-// turns as buttons between them, since a drawing takes no presses. The cards take no size:
-// each is its markup's own, shrunk to fit a narrower pane.
-function activityDesktop($: EngineInterface, e: PaneInput, v: ActivityView, w: number) {
-  if (e.surface === 'terminal') return null
-  const { Box, Svg, Text } = $.ui.resolve(e)
-  const hero = heroSvg(v.shown, v.c, w)
-  const calls = v.calls.length > 0 ? callsSvg(v.calls, v.earlier, v.c, w) : null
-  const tiles = tilesSvg(v.tiles, v.context, v.c, w)
-  const chart = v.bars.length > 0 ? chartSvg(v.bars, v.c, w, v.pick) : null
-  return (
-    <Box key="ashpack-page:Activity" flexDirection="column" rowGap={1}>
-      {v.pick !== null ? activityBack($, e) : null}
-      <Svg key="activity-hero" source={hero.source} alt={heroAlt(v.shown)} />
-      {callFilters($, e, v)}
-      {calls ? <Svg key="activity-calls" source={calls.source} alt={v.calls.map(x => `${x.state} ${x.kind} ${x.target}`).join('; ')} /> : null}
-      <Text key="activity-session-head" bold>
-        This session
-      </Text>
-      <Svg key="activity-tiles" source={tiles.source} alt={tilesAlt(v.tiles)} />
-      {chart ? <Svg key="activity-chart" source={chart.source} alt={`${v.bars.length} turns`} /> : null}
-      {turnRows($, e, v, Math.floor(w / 7.5))}
-    </Box>
-  )
-}
-
-const MARK_OF: Record<Turn['outcome'], string> = { answer: '✓', aborted: '✗', refusal: '✗', error: '✗' }
-
-// The terminal: the same page in text, the head in a rounded box.
-function activityTerminal($: EngineInterface, e: PaneInput, v: ActivityView, cols: number) {
-  const { Box, Text } = $.ui.resolve(e)
-  const s = v.shown
-  const span = (sp: TextSpan, key: string) => (
-    <Text key={key} color={sp.color} dimColor={sp.dim} bold={sp.bold}>
-      {sp.text}
-    </Text>
-  )
-  const inner = cols - 4
-  const tone = !s || s.isLive ? v.c.accent : s.outcome === 'answer' ? v.c.ok : v.c.hot
-  const word = !s ? '' : s.isLive ? 'WORKING' : ({ answer: 'DONE', aborted: 'STOPPED', refusal: 'REFUSED', error: 'FAILED' } as const)[s.outcome ?? 'answer']
-  const tileW = Math.floor(cols / 3)
-  const pct = v.context === undefined ? undefined : Math.round(v.context)
-  return (
-    <Box key="ashpack-page:Activity" flexDirection="column" rowGap={1}>
-      {v.pick !== null ? activityBack($, e) : null}
-      <Box key="activity-hero" flexDirection="column" borderStyle="round" borderColor={tone} paddingX={1}>
-        {s ? (
-          <Box flexDirection="column">
-            <Box justifyContent="space-between" columnGap={1}>
-              <Text color={tone} bold>
-                {s.isLive ? '●' : MARK_OF[s.outcome ?? 'answer']} TURN {s.n} · {word}
-              </Text>
-              <Text dimColor>{lasted(s.isLive ? v.now - s.startedAt : (s.ms ?? 0))}</Text>
-            </Box>
-            <Box columnGap={1}>
-              <Box flexGrow={1} flexShrink={1}>
-                <Text bold wrap="truncate-end">
-                  {s.isLive ? `${s.label}…` : s.prompt || `Turn ${s.n}`}
-                </Text>
-              </Box>
-              {s.isLive ? <Text color={v.c.accent}>{wave(v.f, 8)}</Text> : null}
-            </Box>
-            <Text dimColor wrap="truncate-end">
-              {s.isLive ? (s.prompt ? `“${s.prompt}”` : ' ') : turnFacts(s).join(' · ')}
-            </Text>
-            <Text>{mixCells(s.calls, inner, v.c).map((sp, i) => span(sp, `mix-${i}`))}</Text>
-          </Box>
-        ) : (
-          <Box flexDirection="column">
-            <Text bold>Ready when you are</Text>
-            <Text dimColor>Each turn’s tool calls, timings and cost land here.</Text>
-          </Box>
-        )}
-      </Box>
-      {callFilters($, e, v)}
-      {v.calls.length > 0 ? (
-        <Box key="activity-calls" flexDirection="column">
-          {v.earlier > 0 ? <Text dimColor>{`+ ${v.earlier} earlier`}</Text> : null}
-          {v.calls.map(call => callRow($, e, v.c, call, cols, { text: `${TAG[call.kind].padEnd(5)} `, color: kindColor(call.kind, v.c) }))}
-        </Box>
-      ) : null}
-      <Text bold>This session</Text>
-      <Box key="activity-tiles" flexWrap="wrap" rowGap={1}>
-        {v.tiles.map(t => (
-          <Box key={`tile-${t.label}`} flexDirection="column" width={tileW}>
-            <Text dimColor>
-              {t.label.toUpperCase()}
-              {t.sub ? <Text color={t.sub.color}>{` ${t.sub.text}`}</Text> : null}
-            </Text>
-            <Text bold>{t.value.map((sp, i) => span(sp, `v-${t.label}-${i}`))}</Text>
-          </Box>
-        ))}
-      </Box>
-      {pct !== undefined ? (
-        <Text>
-          <Text dimColor>CONTEXT </Text>
-          {bar(pct, Math.max(8, Math.min(24, cols - 16))).map((b, i) => (
-            <Text key={`ctx-${i}`} color={i === 0 ? levelColor(pct, v.c) : undefined} dimColor={i === 1}>
-              {b}
-            </Text>
-          ))}
-          <Text bold>{` ${pct}%`}</Text>
-        </Text>
-      ) : null}
-      {v.bars.length > 0 ? (
-        <Text wrap="truncate-end">
-          <Text dimColor>TIMELINE </Text>
-          {sparkCells(v.bars.slice(-(cols - 8)), v.c, v.pick).map((sp, i) => span(sp, `spark-${i}`))}
-        </Text>
-      ) : null}
-      {turnRows($, e, v, cols)}
     </Box>
   )
 }
 
 function activityBack($: EngineInterface, e: PaneInput) {
   const { Button } = $.ui.resolve(e)
-  return <Button key="activity-now" plain label="← Back to now" onPress={() => showTurn($, null)} />
+  return <Button key="activity-now" plain {...(e.surface === 'terminal' ? { hotkey: 'b' } : {})} label="← Back to now" onPress={() => showTurn($, null)} />
 }
 
+// The desktop: SVG cards (the head, the calls, the tiles, the chart), the filters and the
+// turns as buttons between them, since a drawing takes no presses. The cards take no size:
+// each is its markup's own, shrunk to fit a narrower pane. A long list of calls is several
+// cards, each small enough for the desktop to draw.
+function activityDesktop($: EngineInterface, e: PaneInput, v: ActivityView, w: number) {
+  if (e.surface === 'terminal') return null
+  const { Box, Svg, Text } = $.ui.resolve(e)
+  return (
+    <Box key="ashpack-page:Activity" flexDirection="column" rowGap={1}>
+      {v.pick !== null ? activityBack($, e) : null}
+      <Svg key="activity-hero" source={heroSvg(v.shown, v.c, w).source} alt={heroAlt(v.shown)} />
+      {callFilters($, e, v)}
+      {moreCalls($, e, v)}
+      {chunks(v.calls, SVG_ROWS).map((part, i) => (
+        <Svg key={`activity-calls-${i}`} source={callsSvg(part, 0, v.c, w).source} alt={part.map(x => `${x.state} ${x.kind} ${ellipsis(x.target, 60)}`).join('; ')} />
+      ))}
+      <Text key="activity-session-head" bold>This session</Text>
+      <Svg key="activity-tiles" source={tilesSvg(v.tiles, v.context, v.c, w).source} alt={tilesAlt(v.tiles)} />
+      {v.bars.length > 0 ? <Svg key="activity-chart" source={chartSvg(v.bars, v.c, w, v.pick).source} alt={`${v.bars.length} turns`} /> : null}
+      {turnRows($, e, v, Math.floor(w / 7.5))}
+    </Box>
+  )
+}
+
+// The terminal: the same page in text, the head in a rounded box.
+function activityTerminal($: EngineInterface, e: PaneInput, v: ActivityView, cols: number) {
+  const { Box, Text } = $.ui.resolve(e)
+  const hero = heroRows(v.shown, v.now, cols - 4, v.c)
+  return (
+    <Box key="ashpack-page:Activity" flexDirection="column" rowGap={1}>
+      {v.pick !== null ? activityBack($, e) : null}
+      <Box key="activity-hero" flexDirection="column" borderStyle="round" borderColor={hero.tone} paddingX={1}>
+        {hero.rows.map((row, i) => rowView($, e, row, `hero-${i}`))}
+      </Box>
+      {callFilters($, e, v)}
+      {v.calls.length > 0 ? (
+        <Box key="activity-calls" flexDirection="column">
+          {moreCalls($, e, v)}
+          {v.calls.map(call => rowView($, e, callRowOf(call, v.c, { text: `${TAG[call.kind].padEnd(5)} `, color: kindColor(call.kind, v.c) }), `call-${call.id}`, Math.max(10, cols - 8)))}
+        </Box>
+      ) : null}
+      <Text bold>This session</Text>
+      <Box key="activity-tiles" flexWrap="wrap" rowGap={1}>
+        {v.tiles.map(t => (
+          <Box key={`tile-${t.label}`} flexDirection="column" width={Math.floor(cols / 3)}>
+            <Text dimColor>
+              {t.label.toUpperCase()}
+              {t.sub ? <Text color={t.sub.color}>{` ${t.sub.text}`}</Text> : null}
+            </Text>
+            <Text bold>{t.value.map((sp, i) => spanText($, e, sp, `v-${t.label}-${i}`))}</Text>
+          </Box>
+        ))}
+      </Box>
+      {v.context !== undefined ? rowView($, e, { spans: contextRow(Math.round(v.context), cols, v.c) }, 'activity-context') : null}
+      {v.bars.length > 0 ? rowView($, e, { spans: timelineRow(v.bars, cols, v.c, v.pick) }, 'activity-timeline') : null}
+      {turnRows($, e, v, cols)}
+    </Box>
+  )
+}
+
+// The Activity page, or its key alone if drawing it fails: one page's fault never costs the
+// drawer the others.
 async function activityPage($: EngineInterface, e: PaneInput, columns: number) {
-  const v = await activityInputs($, e)
-  return e.surface === 'terminal' ? activityTerminal($, e, v, columns) : activityDesktop($, e, v, pagePx(columns))
+  try {
+    const v = await activityInputs($, e)
+    return e.surface === 'terminal' ? activityTerminal($, e, v, columns) : activityDesktop($, e, v, pagePx(columns))
+  } catch (err) {
+    $.ui.log(`ashpack activity page: ${String(err)}`, { to: 'debug' })
+    const { Box } = $.ui.resolve(e)
+    return <Box key="ashpack-page:Activity" />
+  }
 }
 
-// Whether the AshPack drawer shows `id`: a page it hides is drawn as its key alone, so the
+// The drawer's Activity tab: the page while the drawer shows it, else its key alone, so the
 // drawer never redraws for the turn while another page is up.
-async function hostShows($: EngineInterface, id: string): Promise<boolean> {
-  const held = await $.state.get(HOST_PAGE as never).catch(() => undefined)
-  return held?.value === id
-}
-
-// A row compact mode leaves out: dropped on the terminal, empty on the desktop app (which
-// draws its own row for a `display: none` answer).
-function emptyRow($: EngineInterface, e: RenderInput<'ToolUse'> | RenderInput<'ToolResult'> | RenderInput<'ToolGroup'>) {
+async function activityTab($: EngineInterface, e: PaneInput) {
+  const page: unknown = (await $.state.get(HOST_PAGE as never).catch(() => undefined))?.value
+  // The drawer pads its pages by a cell each side.
+  if (page === 'activity') return activityPage($, e, e.props.bodyColumns - 2)
+  tickSeconds($, false)
   const { Box } = $.ui.resolve(e)
-  return e.surface === 'terminal' ? <Box display="none" /> : <Box />
+  return <Box key="ashpack-page:Activity" />
 }
 
 // ── the Status page: in the AshPack drawer, or a pane of its own ─────────────
 
-type PaneInput = RenderInput<'Pane'>
+// An ON/OFF switch, the same in every row.
+function switchButton($: EngineInterface, e: PaneInput, key: string, isOn: boolean, onPress: () => unknown) {
+  const { Button } = $.ui.resolve(e)
+  return <Button key={key} plain dimColor={!isOn} label={isOn ? '● ON ' : '○ OFF'} onPress={onPress} />
+}
 
 // A toggle as a setting: its name and what it does on the left, the switch on the right.
 function settingRow($: EngineInterface, e: PaneInput, key: string, label: string, hint: string, isOn: boolean, onPress: () => unknown) {
-  const { Box, Button, Text } = $.ui.resolve(e)
+  const { Box, Text } = $.ui.resolve(e)
   return (
     <Box key={`setting-${key}`} justifyContent="space-between" columnGap={2}>
       <Box flexDirection="column" flexShrink={1}>
         <Text bold>{label}</Text>
         <Text dimColor>{hint}</Text>
       </Box>
-      <Button key={key} plain dimColor={!isOn} label={isOn ? '● ON ' : '○ OFF'} onPress={onPress} />
+      {switchButton($, e, key, isOn, onPress)}
     </Box>
   )
 }
@@ -661,7 +541,7 @@ function chipRow($: EngineInterface, e: PaneInput, chip: (typeof CHIPS)[number],
         <Text>{chip.label}</Text>
         <Text dimColor>{chip.sample}</Text>
       </Box>
-      <Button key={`chip-${chip.id}`} plain dimColor={!isOn} label={isOn ? '● ON ' : '○ OFF'} onPress={() => toggleChip($, chip.id)} />
+      {switchButton($, e, `chip-${chip.id}`, isOn, () => toggleChip($, chip.id))}
     </Box>
   )
 }
@@ -695,40 +575,45 @@ async function openPage($: EngineInterface, page: 'status' | 'activity'): Promis
   await $.ui.open({ id, title, focus: true, closeOnEscape: true, columns: PANE_COLUMNS })
 }
 
+// A switch or a pick that survives sessions: the atom's write (spelled out at the call, so
+// the engine can list it), then the store.
+async function save<T>($: EngineInterface, key: string, write: Promise<T>): Promise<T> {
+  const value = await write
+  await $.store.set(key, value)
+  return value
+}
+
 async function toggle($: EngineInterface, which: 'compact' | 'statusOn'): Promise<boolean> {
   if (which === 'compact') {
-    const isOn = !(await read($, compact))
-    await update($, compact, () => isOn)
-    await $.store.set(COMPACT_KEY, isOn)
+    const isOn = await save($, COMPACT_KEY, update($, compact, v => !v))
+    await syncFrames($) // a turn under way starts or stops its wave
     return isOn
   }
-  const isOn = !(await read($, statusOn))
-  await update($, statusOn, () => isOn)
-  await $.store.set(STATUS_KEY, isOn)
+  const isOn = await save($, STATUS_KEY, update($, statusOn, v => !v))
   refreshStatus($) // the repo chips fetch nothing while the chips are off
   return isOn
 }
 
 async function toggleChip($: EngineInterface, id: ChipId): Promise<void> {
-  await update($, hiddenChips, list => (list.includes(id) ? list.filter(x => x !== id) : [...list, id]))
-  await $.store.set(CHIPS_KEY, await read($, hiddenChips))
+  await save($, CHIPS_KEY, update($, hiddenChips, list => (list.includes(id) ? list.filter(x => x !== id) : [...list, id])))
   refreshStatus($) // a repo chip turned on fetches its data now, not at the next tick
 }
 
 async function moveChipBy($: EngineInterface, id: ChipId, by: -1 | 1, listed: readonly ChipId[]): Promise<void> {
-  await update($, orderedChips, order => moveChip(order, id, by, listed))
-  await $.store.set(ORDER_KEY, await read($, orderedChips))
+  await save($, ORDER_KEY, update($, orderedChips, order => moveChip(order, id, by, listed)))
+}
+
+// A row compact mode leaves out: dropped on the terminal, empty on the desktop app (which
+// draws its own row for a `display: none` answer).
+function emptyRow($: EngineInterface, e: RenderInput<'ToolUse'> | RenderInput<'ToolResult'> | RenderInput<'ToolGroup'>) {
+  const { Box } = $.ui.resolve(e)
+  return e.surface === 'terminal' ? <Box display="none" /> : <Box />
 }
 
 export const register: Register = on => {
   // ── shared events ──
   on('session.start', async ($, e, next) => {
-    const [storedCompact, storedStatus, storedChips, storedOrder] = await Promise.all([
-      $.store.get(COMPACT_KEY),
-      $.store.get(STATUS_KEY),
-      $.store.get(CHIPS_KEY),
-      $.store.get(ORDER_KEY),
-    ])
+    const [storedCompact, storedStatus, storedChips, storedOrder] = await Promise.all([$.store.get(COMPACT_KEY), $.store.get(STATUS_KEY), $.store.get(CHIPS_KEY), $.store.get(ORDER_KEY)])
     await update($, compact, () => storedCompact === true)
     await update($, statusOn, () => storedStatus !== false)
     // A chip added since the pick was stored takes its default; both are stored again so it
@@ -746,26 +631,25 @@ export const register: Register = on => {
       argumentHint: '[activity|compact|chips]',
     })
     const started = await next(e)
-    seen = await seenFromSettings($).catch(() => seen)
+    const settings = await $.settings.read().catch(() => ({}) as Record<string, unknown>)
+    effort = typeof settings.effortLevel === 'string' ? settings.effortLevel : effort
     refreshStatus($)
-    $.clock.every(STATUS_TICK_MS, () => refreshStatus($))
+    statusTimer?.cancel()
+    statusTimer = $.clock.every(STATUS_TICK_MS, () => refreshStatus($))
     return started
   })
 
   on('turn.start', async ($, e, next) => {
     // The session's cost now, so the turn's own is the difference when it ends.
-    const [now, h, usage, pick, filter] = await Promise.all([$.clock.now(), read($, history), $.session.usage().catch(() => null), read($, shownTurn), read($, callFilter)])
-    const prompt = [...String(e.text ?? '').replace(/\s+/g, ' ').trim()].slice(0, 200).join('')
+    const [now, usage, pick, list] = await Promise.all([$.clock.now(), $.session.usage().catch(() => null), read($, shownTurn), read($, plan)])
+    turnCount ??= (await read($, history)).totals.turns
     const cost = usage?.cost ? { costAtStart: usage.cost.usd } : {}
-    await update($, activity, () => ({ n: h.totals.turns + 1, prompt, startedAt: now, label: 'Thinking', calls: [], ...cost }))
+    await update($, activity, () => ({ n: (turnCount ?? 0) + 1, prompt: ellipsis(oneLine(String(e.text ?? '')), PROMPT_CHARS), startedAt: now, steps: [], calls: [], ...cost }))
     // Following the work, the new turn's calls show whole, not under the last turn's filter.
-    if (pick === null && filter !== 'all') await update($, callFilter, () => 'all')
+    if (pick === null) await showCalls($, 'all')
     // A finished task list is the last turn's; a new one starts empty.
-    await update($, plan, p => (p.every(s => s.status === 'completed') ? [] : p))
-    stopTicker()
-    // Only the terminal reads `frame`; the desktop's loader animates itself, and a tick
-    // there would only redraw the transcript.
-    if (terminalSeen) ticker = $.clock.every(FRAME_MS, () => void update($, frame, n => (n + 1) % 100_000))
+    if (list.length > 0 && list.every(s => s.status === 'completed')) await update($, plan, () => [])
+    await syncFrames($)
     return next(e)
   })
 
@@ -780,9 +664,12 @@ export const register: Register = on => {
   })
 
   on('session.end', async ($, e, next) => {
-    if (e.reason === 'clear') await clearHistory($)
+    if (e.reason === 'clear' || e.reason === 'resume') await clearHistory($)
     return next(e)
   }).catch(($, e, next) => next(e))
+
+  // The drawer or the Activity pane closing stops the page's ticks.
+  on('ui.close', ($, e, next) => ((e.id === DRAWER || e.id === ACTIVITY_PANE) && tickSeconds($, false), next(e))).catch(($, e, next) => next(e))
 
   // ── status rows: when to refresh ──
   on('session.measure', async ($, e, next) => {
@@ -792,6 +679,7 @@ export const register: Register = on => {
   })
   on('classic.SessionStart', ($, e, next) => (see(e), refreshStatus($), next(e))).catch(($, e, next) => next(e))
   on('classic.UserPromptSubmit', ($, e, next) => (see(e), refreshStatus($), next(e))).catch(($, e, next) => next(e))
+  // Effort holds for a turn; the prompt's hook may not carry it, so a call's says it before the turn ends.
   on('classic.PostToolUse', ($, e, next) => (see(e), next(e))).catch(($, e, next) => next(e))
   on('classic.Stop', ($, e, next) => (see(e), refreshStatus($), next(e))).catch(($, e, next) => next(e))
   // /model, the picker or a fallback: the model chip follows at once, not at the next tick.
@@ -800,14 +688,16 @@ export const register: Register = on => {
   // ── compact mode: what the popup says, and the task list it splits into sections ──
   on('tool.call', async ($, e, next) => {
     // Only the model's own calls are steps. A plugin's call (Baton lists the sessions every
-    // 20 s) is not, and outside a turn there is nothing to show: no write for either.
-    if (next.origin.plugin !== 'engine' || (await read($, activity)) === null) return next(e)
-    const label = describeTool(String(e.tool), e)
-    const isMain = !e.agentId // a subagent's list and calls are its own; its Agent card counts it
-    const call = isMain ? callOf(String(e.tool), e, await $.session.cwd().catch(() => '')) : null
+    // 20 s) is not, and outside a turn there is nothing to show: no write for either. A
+    // subagent's call is the popup's line alone: no write while compact mode is off.
+    const isMain = !e.agentId
+    if (next.origin.plugin !== 'engine' || (await read($, activity)) === null || (!isMain && !(await read($, compact)))) return next(e)
+    const tool = String(e.tool)
+    const line = callOf(tool, e, isMain ? await $.session.cwd().catch(() => '') : '')
+    const call = isMain && isListed(tool) ? line : null // a subagent's calls are its own; its Agent card counts it
     const id = e.tool_use_id
     const startedAt = await $.clock.now()
-    await update($, activity, a => a && { ...a, label, calls: call ? [...a.calls, { id, ...call, state: 'running' as const }].slice(-MAX_CALLS) : a.calls })
+    await update($, activity, a => a && startCall(a, id, line.label, call))
     if (isMain && e.tool === 'TodoWrite') await update($, plan, () => planFromTodos(e.todos))
     if (isMain && e.tool === 'TaskUpdate') await update($, plan, p => updateTask(p, e))
     const result = await next(e)
@@ -815,59 +705,46 @@ export const register: Register = on => {
       const taskId = (result.result as { task?: { id?: unknown } } | undefined)?.task?.id
       if (typeof taskId === 'string') await update($, plan, p => addTask(p, taskId, e.subject))
     }
-    // The call settles (failed, or done with an edit's size); the line goes back to thinking
-    // unless another call took it.
+    // The call settles: failed, or done with an edit's size; the line goes to the latest call
+    // still running.
     const ms = (await $.clock.now()) - startedAt
-    const failed = result.deny !== undefined || result.isError === true
-    const size = call?.kind === 'edit' && !failed ? editSize(result.result) : undefined
-    await update($, activity, a => a && {
-      ...a,
-      label: a.label === label ? 'Thinking' : a.label,
-      calls: a.calls.map(x => (x.id === id ? { ...x, state: failed ? ('failed' as const) : ('ok' as const), ms, ...size } : x)),
-    })
+    const isFailed = result.deny !== undefined || result.isError === true
+    const size = call?.kind === 'edit' && !isFailed ? editSize(result.result) : undefined
+    await update($, activity, a => a && settleCall(a, id, { isFailed, ms, size }))
     return result
   }).catch(($, e, next) => next(e))
 
-  // ── compact mode: hidden rows (an invisible Box); ctrl+o still shows all ──
-  // Compact mode: no tool rows. The terminal drops the row (display none); the desktop
-  // app draws its own row for a `display: none` answer, so there it gets an empty one.
-  on('ui.render', { component: 'ToolUse' }, async ($, e, next) => {
-    if (!(await isCompact($))) return next(e)
-    return emptyRow($, e)
-  })
+  // ── compact mode: no tool rows, in the ctrl+o transcript too ──
+  // Its rows are ToolUse rows (an expanded group unfolds into them), and a ToolUse hook
+  // cannot tell them apart: turn compact mode off to read every call. The terminal drops the
+  // row (display none); the desktop app draws its own row for a `display: none` answer, so
+  // there it gets an empty one.
+  on('ui.render', { component: ['ToolUse', 'ToolResult'] }, async ($, e, next) => ((await read($, compact)) ? emptyRow($, e) : next(e)))
+  on('ui.render', { component: 'ToolGroup' }, async ($, e, next) => (e.props.isExpanded || !(await read($, compact)) ? next(e) : emptyRow($, e)))
+  on('ui.render', { component: 'ToolProgress' }, async ($, e, next) => ((await read($, compact)) ? next({ ...e, props: { ...e.props, hint: '' } }) : next(e)))
 
-  on('ui.render', { component: 'ToolResult' }, async ($, e, next) => {
-    if (!(await isCompact($))) return next(e)
-    return emptyRow($, e)
-  })
-
-  on('ui.render', { component: 'ToolGroup' }, async ($, e, next) => {
-    if (e.props.isExpanded || !(await isCompact($))) return next(e)
-    return emptyRow($, e)
-  })
-
-  on('ui.render', { component: 'ToolProgress' }, async ($, e, next) =>
-    (await isCompact($)) ? next({ ...e, props: { ...e.props, hint: '' } }) : next(e),
-  )
-
-  // ── the band above the prompt: working popup, status rows, then other mods' band ──
+  // ── the band above the prompt: the working popup or the status rows, then other mods' band ──
+  // Compact mode is read first, and only while Claude works: off, the band reads nothing of
+  // the turn and never draws again for a call. The popup reads the turn; the chips, their data.
   on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => {
     const below = await next(e)
     if (e.props.hasSurvey) return below
     if (e.surface === 'terminal') terminalSeen = true
-    const [[isOn, data, now, colors, shown], isCompactOn, a] = await Promise.all([statusInputs($), isCompact($), read($, activity)])
-    const showPopup = isCompactOn && e.props.isWorking
-    const showStatus = isOn && data !== null && !isUnderPrompt(e) && !showPopup
-    if (!showPopup && !showStatus) return below
-
     const { Box } = $.ui.resolve(e)
-    const popup = showPopup ? await drawPopup($, e, a, now) : null
-    const rows = showStatus && data ? drawChips($, e, data, now, e.props.bodyColumns, colors, shown) : null
-
+    if (e.props.isWorking && (await read($, compact))) {
+      return (
+        <Box flexDirection="column">
+          {await drawPopup($, e)}
+          {below}
+        </Box>
+      )
+    }
+    if (isUnderPrompt(e)) return below
+    const [isOn, data, now, colors, shown] = await statusInputs($)
+    if (!isOn || data === null) return below
     return (
       <Box flexDirection="column">
-        {popup}
-        {rows}
+        {drawChips($, e, data, now, e.props.bodyColumns, colors, shown)}
         {below}
       </Box>
     )
@@ -907,12 +784,10 @@ export const register: Register = on => {
     if (e.requestId === ACTIVITY_PANE) return <Box paddingX={1}>{await activityPage($, e, e.props.bodyColumns - 2)}</Box>
     const below = e.requestId === DRAWER ? await next(e) : null
     const [isCompactOn, isStatusOn, order, hidden] = await Promise.all([read($, compact), read($, statusOn), read($, orderedChips), read($, hiddenChips)])
-    // The drawer pads its pages by a cell each side.
-    const activityTab = e.requestId !== DRAWER ? null : (await hostShows($, 'activity')) ? await activityPage($, e, e.props.bodyColumns - 2) : <Box key="ashpack-page:Activity" />
     return (
       <Box flexDirection="column" paddingX={e.requestId === PANE ? 1 : 0}>
         {below}
-        {activityTab}
+        {e.requestId === DRAWER ? await activityTab($, e) : null}
         {statusPage($, e, isCompactOn, isStatusOn, order, hidden)}
       </Box>
     )

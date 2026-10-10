@@ -8,7 +8,7 @@ The host. One drawer and one strip, shared by every mod that adopts them, so mod
 
 Click `◆ AshPack ▸` in the footer, or run `/ashpack`. The panel docks beside the transcript in the desktop app and in a fullscreen terminal, and sits above the prompt on the terminal's main screen.
 
-- Tabs: **Home**, then one per mod that has a page (**Status**, **Skins**, **Baton**, yours).
+- Tabs: **Home**, then one per mod page (**Status** and **Activity**, **Skins**, **Baton**, yours).
 - `/ashpack <page>` opens a page (`/ashpack skins`). `/ashpack close` and Esc close the drawer.
 - On the terminal, `n` and `p` step through the tabs.
 - The page shown and whether the drawer was open are kept across sessions.
@@ -20,7 +20,7 @@ One row above the prompt. Each mod puts a chip there (`ctx ▰▰▱▱ 42%`, `b
 
 ## Plugin order
 
-Claude Code runs the plugins of the user tier in the order of `enabledPlugins` in `~/.claude/settings.json`, first entry outermost. The host sees the pages and chips of the mods beneath it only, so `"ashpack@ashpack"` must be the first entry. When it is not, Home offers `↑ move AshPack first`, which rewrites the order and hands the prompt `/reload-plugins`.
+Claude Code runs the plugins of the user tier in the order of `enabledPlugins` in `~/.claude/settings.json` (under `CLAUDE_CONFIG_DIR` when it is set), first entry outermost. The host sees the pages and chips of the mods beneath it only, so `"ashpack@ashpack"` must be the first entry. When it is not, Home offers `↑ move AshPack first`, which rewrites the order and hands the prompt `/reload-plugins`.
 
 ## Colors
 

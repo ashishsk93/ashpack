@@ -1,10 +1,14 @@
-// One tool call of the turn, for the working popup: what kind, on what, how it went.
+// One tool call of the turn, for the working popup's cards and the Activity page: what kind,
+// on what (cut to TARGET_CHARS), how it went.
 export type CallKind = 'read' | 'edit' | 'command' | 'search' | 'web' | 'agent' | 'skill' | 'tool'
 export type Call = { id: string; kind: CallKind; target: string; state: 'running' | 'ok' | 'failed'; ms?: number; added?: number; removed?: number }
 
-// What the turn is doing: its number and prompt, the running step's line, its calls so far,
-// and what the session had cost when it began.
-export type Activity = { n: number; prompt: string; startedAt: number; label: string; calls: Call[]; costAtStart?: number }
+// A call running now, main's or a subagent's, and its line for the popup (`Reading a.ts`).
+export type Step = { id: string; label: string }
+
+// What the turn is doing: its number and prompt, the calls running now (the latest heads the
+// popup), its calls so far, and what the session had cost when it began.
+export type Activity = { n: number; prompt: string; startedAt: number; steps: Step[]; calls: Call[]; costAtStart?: number }
 
 // A finished turn, kept for the Activity page: what was asked, its calls, how it ended.
 export type Turn = {
@@ -20,7 +24,8 @@ export type Turn = {
 }
 
 // The session's finished turns added up: kept whole, while the history keeps the latest turns.
-export type Totals = { turns: number; workMs: number; calls: number; failed: number; added: number; removed: number; files: string[] }
+// `since`: when the first of them began.
+export type Totals = { turns: number; workMs: number; calls: number; failed: number; added: number; removed: number; files: string[]; since?: number }
 
 // The Activity page's record, one value so a finished turn joins both in one write.
 export type History = { turns: Turn[]; totals: Totals } // turns: the latest, oldest first
@@ -29,7 +34,8 @@ export type History = { turns: Turn[]; totals: Totals } // turns: the latest, ol
 export type Section = { id: string; title: string; status: 'pending' | 'in_progress' | 'completed' }
 
 // `dirty` counts every changed path; the rest split it: staged, changed in the tree, new, in conflict.
-export type GitInfo = { branch: string; dirty: number; ahead: number; behind: number; staged: number; changed: number; untracked: number; conflicts: number }
+// `stashes` when git printed them (2.35 on, and only while there are some).
+export type GitInfo = { branch: string; dirty: number; ahead: number; behind: number; staged: number; changed: number; untracked: number; conflicts: number; stashes?: number }
 
 // A pull request for the branch, as `gh pr view` reports it, its checks counted.
 export type PullRequest = {
@@ -79,7 +85,9 @@ declare module 'claude-code' {
       history: History
       shownTurn: number | null // the Activity page's turn, by number; null follows the latest
       callFilter: CallKind | 'all' // the Activity page's calls: one kind, or all
-      frame: number
+      callLimit: number // the Activity page's calls listed, the latest; Show more adds to it
+      frame: number // the terminal popup's wave, 8 a second
+      second: number // the terminal Activity page's running time, once a second
       status: StatusData | null
       plan: Section[]
     }

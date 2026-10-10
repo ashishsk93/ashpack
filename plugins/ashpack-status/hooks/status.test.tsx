@@ -33,8 +33,10 @@ import {
   wave,
   waveSvg,
   windowLabel,
+  isListed,
+  lasted,
 } from './format'
-import { addTurn, heroSvg, lasted, NO_TOTALS, shownOf, tokens, turnLabel, turnOf } from './activity'
+import { addTurn, heroSvg, NO_TOTALS, shownOf, tokens, turnLabel, turnOf } from './activity'
 
 const SURFACES = ['terminal', 'desktop'] as const
 const FULL = { columns: 160, rows: 50, isFullscreen: true } as never
@@ -157,11 +159,22 @@ test('helpers: names, bars, colors, git, loader', () => {
   expect((barSvg(42, 4).match(/<rect/g) ?? []).length).toBe(4)
 
   // The popup's cards: a call's kind and target, counts per kind, an edit's size.
-  expect(callOf('Read', { file_path: '/repo/src/a.ts' }, '/repo')).toEqual({ kind: 'read', target: 'src/a.ts' })
-  expect(callOf('Bash', { command: 'npm\n  test' }, '/repo')).toEqual({ kind: 'command', target: 'npm test' })
-  expect(callOf('Grep', { pattern: 'TODO', path: '/repo/src' }, '/repo')).toEqual({ kind: 'search', target: 'TODO in src' })
-  expect(callOf('mcp__github__search_code', {}, '/repo')).toEqual({ kind: 'tool', target: 'github search_code' })
-  expect(callOf('TodoWrite', {}, '/repo')).toBeNull() // the Tasks card's
+  // One table says each tool's kind, the popup's line and the call's target.
+  expect(callOf('Read', { file_path: '/repo/src/a.ts' }, '/repo')).toEqual({ kind: 'read', label: 'Reading a.ts', target: 'src/a.ts' })
+  expect(callOf('Bash', { command: 'npm\n  test' }, '/repo')).toEqual({ kind: 'command', label: 'Running npm test', target: 'npm test' })
+  expect(callOf('PowerShell', { command: 'dir' }, '/repo')).toEqual({ kind: 'command', label: 'Running dir', target: 'dir' })
+  expect(callOf('MultiEdit', { file_path: '/repo/b.ts' }, '/repo')).toEqual({ kind: 'edit', label: 'Editing b.ts', target: 'b.ts' })
+  expect(callOf('Grep', { pattern: 'TODO', path: '/repo/src' }, '/repo')).toEqual({ kind: 'search', label: 'Searching TODO', target: 'TODO in src' })
+  expect(callOf('mcp__github__search_code', {}, '/repo')).toEqual({ kind: 'tool', label: 'Using github search_code', target: 'github search_code' })
+  expect(callOf('TaskStop', { task_id: 'b7' }, '/repo')).toEqual({ kind: 'tool', label: 'Stopping a background task', target: 'TaskStop b7' })
+  expect(callOf('toString', {}, '/repo').kind).toBe('tool') // not the object's own
+  expect(isListed('TodoWrite')).toBe(false) // the Tasks card's
+  expect(isListed('TaskStop')).toBe(true) // it stops a background task: a call
+  // A heredoc is no target to keep whole: cut, and never through a surrogate pair.
+  const heredoc = callOf('Bash', { command: `cat <<EOF\n${'😀'.repeat(20_000)}\nEOF` }, '/repo')
+  expect([...heredoc.target]).toHaveLength(200)
+  expect(heredoc.target.endsWith('😀…')).toBe(true)
+  expect([...heredoc.label].length).toBe('Running '.length + 40)
   const calls = [
     { id: '1', kind: 'read' as const, target: 'a', state: 'ok' as const },
     { id: '2', kind: 'command' as const, target: 'ls', state: 'ok' as const },
@@ -622,12 +635,12 @@ test('activity helpers: durations, tokens, turn labels, totals', () => {
   expect(tokens(820)).toBe('820')
   expect(tokens(12_400)).toBe('12k')
   expect(tokens(1_500)).toBe('1.5k')
-  const live = { n: 3, prompt: 'fix it', startedAt: 0, label: 'Reading a.ts', calls: [{ id: 'x', kind: 'read' as const, target: 'a.ts', state: 'running' as const }] }
+  const live = { n: 3, prompt: 'fix it', startedAt: 0, steps: [{ id: 'x', label: 'Reading a.ts' }], calls: [{ id: 'x', kind: 'read' as const, target: 'a.ts', state: 'running' as const }] }
   // A call still running when the turn ends counts as failed.
   const turn = turnOf(live, { ms: 5000, outcome: 'aborted' })
   expect(turn.calls[0]?.state).toBe('failed')
   const t = addTurn(NO_TOTALS, { ...turn, calls: [{ id: 'e', kind: 'edit', target: 'b.ts', state: 'ok', added: 3, removed: 1 }] })
-  expect(t).toEqual({ turns: 1, workMs: 5000, calls: 1, failed: 0, added: 3, removed: 1, files: ['b.ts'] })
+  expect(t).toEqual({ since: 0, turns: 1, workMs: 5000, calls: 1, failed: 0, added: 3, removed: 1, files: ['b.ts'] })
   expect(turnLabel({ n: 12, prompt: 'make the popup smaller please', ms: 130_000, calls: [] }, 30)).toBe('#12  make the po… · 2m 10s · 0')
   // The page shows the turn picked, else the running one, else the last.
   expect(shownOf(live, [turn], null)?.isLive).toBe(true)
@@ -685,7 +698,9 @@ test('the Activity page keeps each turn: the one in view, its calls, the session
   expect(page).toContain('"key":"ashpack-page:Activity"')
   for (const part of ['TURN 1', 'DONE', 'fix the login bug', '2m 10s', '$0.21', '38k in · 2.1k out']) expect(page).toContain(part)
   for (const part of ['src/auth.ts', 'a.ts', '+2', 'false']) expect(page).toContain(part) // the calls
-  for (const part of ['SESSION', '1h 02m', 'TOOL CALLS', '1 failed', '1 file', '$1.21', '41%', 'TIMELINE']) expect(page).toContain(part) // the tiles and chart
+  for (const part of ['SESSION', 'TOOL CALLS', '1 failed', '1 file', '$1.21', '41%', 'TIMELINE']) expect(page).toContain(part) // the tiles and chart
+  // The session's time runs from its first turn, as the turns count, not from its first launch.
+  expect(page).toContain('Session 2m 10s, Working 2m 10s, Turns 1')
   expect(page).toContain('"label":"▸ #1  fix the login bug · 2m 10s · 3"')
   // A filter narrows the calls to one kind.
   await panel.press({ key: 'filter-command' })
