@@ -87,7 +87,9 @@ async function active($: EngineInterface): Promise<Active | null> {
 // Other mods wear the active skin: the host its accent, the status chips and popup its palette.
 async function shareAccent($: EngineInterface): Promise<void> {
   const a = await active($)
-  const palette: SharedPalette | null = a ? { ok: a.p.green, warn: a.p.yellow, hot: a.p.red, accent: a.p.accent, blue: a.p.blue, muted: a.p.muted } : null
+  const palette: SharedPalette | null = a
+    ? { ok: a.p.green, warn: a.p.yellow, hot: a.p.red, accent: a.p.accent, blue: a.p.blue, muted: a.p.muted, bg: a.p.bg, text: a.p.text, cyan: a.p.cyan, pink: a.p.pink, purple: a.p.purple }
+    : null
   await update($, sharedAccent, () => a?.p.accent ?? '')
   // Only a change is written: each write redraws every reader.
   if (JSON.stringify(await read($, sharedPalette)) !== JSON.stringify(palette)) await update($, sharedPalette, () => palette)

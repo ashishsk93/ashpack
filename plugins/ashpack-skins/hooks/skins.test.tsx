@@ -606,7 +606,7 @@ test('the skin shares its palette with the other AshPack mods', async ($, on) =>
   })
   await $.command.run({ command: 'skin', args: 'nord' } as never)
   const p = SKINS.find(s => s.id === 'nord')!.dark
-  expect(shared).toEqual({ ok: p.green, warn: p.yellow, hot: p.red, accent: p.accent, blue: p.blue, muted: p.muted })
+  expect(shared).toEqual({ ok: p.green, warn: p.yellow, hot: p.red, accent: p.accent, blue: p.blue, muted: p.muted, bg: p.bg, text: p.text, cyan: p.cyan, pink: p.pink, purple: p.purple })
   await $.command.run({ command: 'skin', args: 'off' } as never)
   expect(shared).toBeNull()
 })

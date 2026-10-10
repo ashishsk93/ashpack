@@ -19,8 +19,9 @@ const EFFORT: Record<string, string> = { low: '◔', medium: '◑', high: '◕',
 // desktop app's off-white, 3.9:1 or more on #1e1e1e): a mod cannot tell which it is drawn on.
 export const COLORS = { ok: '#1a9450', warn: '#a87700', hot: '#e5484d', accent: '#8b5cf6', blue: '#2f7bf0', muted: '#8a8a8a' } as const
 
-// The colours the chips and the popup draw in: AshPack's own, or the active skin's.
-export type Colors = { [K in keyof typeof COLORS]: string }
+// The colours the chips and the popup draw in: AshPack's own, or the active skin's. A skin
+// shares its card colours and more hues too (Skins 0.8.1 on), for the Activity page.
+export type Colors = { [K in keyof typeof COLORS]: string } & { bg?: string; text?: string; cyan?: string; pink?: string; purple?: string }
 
 // "claude-opus-5-5[1m]" -> "Opus 5.5 1M"; "opus[1m]" -> "Opus 1M"
 export const prettyModel = (id: string): string => {

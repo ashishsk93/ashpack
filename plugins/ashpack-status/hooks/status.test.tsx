@@ -34,6 +34,7 @@ import {
   waveSvg,
   windowLabel,
 } from './format'
+import { addTurn, heroSvg, lasted, NO_TOTALS, shownOf, tokens, turnLabel, turnOf } from './activity'
 
 const SURFACES = ['terminal', 'desktop'] as const
 const FULL = { columns: 160, rows: 50, isFullscreen: true } as never
@@ -474,7 +475,7 @@ test('compact mode: the popup shows the running step with a wave, a card per kin
   on('turn.start', ($, e) => e as never)
   const footer = await $.ui.mount({ plugin: 'ashpack-status', surface: 'terminal', ...DRAWER, props: PANE_PROPS })
   await footer.press({ key: 'compact' })
-  await $.turn.start({ prompt: 'go', turnId: 't1' } as never)
+  await $.turn.start({ text: 'go', turnId: 't1' } as never)
   const bandProps = { hasSurvey: false, isWorking: true, maxRows: 14, bodyColumns: 120, scroll: { offset: 0, bodyRows: 14, contentRows: 0 }, view: {} } as never
   await $.tool.call({ tool: 'Read', file_path: '/repo/src/a.ts', tool_use_id: 'r1' } as never)
   await $.tool.call({ tool: 'Read', file_path: '/repo/src/b.ts', tool_use_id: 'r2' } as never)
@@ -553,7 +554,7 @@ test('a plugin\'s own tool call is no step of the turn', { plugins: [poller] }, 
   on('turn.start', ($, e) => e as never)
   const footer = await $.ui.mount({ plugin: 'ashpack-status', surface: 'desktop', ...DRAWER, props: PANE_PROPS })
   await footer.press({ key: 'compact' })
-  await $.turn.start({ prompt: 'go', turnId: 't1' } as never)
+  await $.turn.start({ text: 'go', turnId: 't1' } as never)
   const bandProps = { hasSurvey: false, isWorking: true, maxRows: 10, bodyColumns: 120, scroll: { offset: 0, bodyRows: 10, contentRows: 0 }, view: {} } as never
   const popup = async () => {
     const band = await $.ui.mount({ plugin: 'ashpack-status', surface: 'desktop', component: 'AbovePrompt', viewport: FULL, props: bandProps })
@@ -612,4 +613,123 @@ test('with a skin on, the chips and the popup draw in its palette', async ($, on
     if (surface === 'terminal') expect(drawn).toContain(palette.accent) // the model chip
     await band.unmount()
   }
+})
+
+test('activity helpers: durations, tokens, turn labels, totals', () => {
+  expect(lasted(45_000)).toBe('45s')
+  expect(lasted(130_000)).toBe('2m 10s')
+  expect(lasted(3_840_000)).toBe('1h 04m')
+  expect(tokens(820)).toBe('820')
+  expect(tokens(12_400)).toBe('12k')
+  expect(tokens(1_500)).toBe('1.5k')
+  const live = { n: 3, prompt: 'fix it', startedAt: 0, label: 'Reading a.ts', calls: [{ id: 'x', kind: 'read' as const, target: 'a.ts', state: 'running' as const }] }
+  // A call still running when the turn ends counts as failed.
+  const turn = turnOf(live, { ms: 5000, outcome: 'aborted' })
+  expect(turn.calls[0]?.state).toBe('failed')
+  const t = addTurn(NO_TOTALS, { ...turn, calls: [{ id: 'e', kind: 'edit', target: 'b.ts', state: 'ok', added: 3, removed: 1 }] })
+  expect(t).toEqual({ turns: 1, workMs: 5000, calls: 1, failed: 0, added: 3, removed: 1, files: ['b.ts'] })
+  expect(turnLabel({ n: 12, prompt: 'make the popup smaller please', ms: 130_000, calls: [] }, 30)).toBe('#12  make the po… · 2m 10s · 0')
+  // The page shows the turn picked, else the running one, else the last.
+  expect(shownOf(live, [turn], null)?.isLive).toBe(true)
+  expect(shownOf(live, [turn], 3)?.isLive).toBe(false)
+  expect(shownOf(null, [turn], null)?.n).toBe(3)
+  expect(shownOf(null, [], null)).toBeNull()
+  // A pasted escape code would make the card's markup invalid: it is dropped.
+  const pasted = turnOf({ ...live, prompt: 'why \u001b[31mred\u001b[0m <b>' }, { ms: 1000, outcome: 'answer' })
+  const hero = heroSvg(shownOf(null, [pasted], null), COLORS, 400).source
+  expect(hero).not.toContain('\u001b')
+  expect(hero).toContain('why [31mred[0m &lt;b&gt;')
+})
+
+test('the Activity page keeps each turn: the one in view, its calls, the session, every turn', async ($, on) => {
+  mock.store(on)
+  let hostPage = 'activity'
+  // Stands in for the AshPack host, whose drawer shows one page at a time.
+  on('state.get', ($, e, next) => {
+    const { plugin, key } = e as { plugin: string; key: string }
+    return plugin === 'ashpack' && key === 'page' ? ({ value: { value: hostPage, version: 1 } } as never) : next(e)
+  })
+  on('ui.render', DRAWER, ($, e) => {
+    const { Box } = $.ui.resolve(e)
+    return <Box />
+  })
+  const clock = mock.clock(on, { now: Date.parse('2026-10-08T10:00:00Z') })
+  let cost = 1
+  on('session.usage', () => ({ value: { startedAt: Date.parse('2026-10-08T09:00:00Z'), context: { window: 1, tokens: 1, percent: 41 }, rateLimits: [], cost: { usd: cost } } }) as never)
+  on('session.cwd', () => ({ value: '/repo' }))
+  on('session.model', () => ({ value: 'claude-opus-5-5' }))
+  on('process.run', () => ({ value: { exitCode: 0, stdout: '# branch.head main\n', stderr: '' } }) as never)
+  on('tool.call', ($, e) => {
+    if (e.tool === 'Edit') return { result: { filePath: '/repo/a.ts', structuredPatch: [{ lines: ['-x', '+y', '+z'] }] } } as never
+    if (e.tool === 'Bash' && (e as { command?: string }).command === 'false') return { result: {}, isError: true } as never
+    return { result: {} } as never
+  })
+  on('turn.start', ($, e) => e as never)
+  on('turn.complete', ($, e) => ({ text: e.answer }) as never)
+  on('session.end', ($, e) => ({ sessionId: e.sessionId }) as never)
+
+  await $.turn.start({ text: 'fix the login bug', turnId: 't1' } as never)
+  await $.tool.call({ tool: 'Read', file_path: '/repo/src/auth.ts', tool_use_id: 'r1' } as never)
+  await $.tool.call({ tool: 'Edit', file_path: '/repo/a.ts', old_string: 'x', new_string: 'y', tool_use_id: 'e1' } as never)
+  await $.tool.call({ tool: 'Bash', command: 'false', tool_use_id: 'c1' } as never)
+  cost = 1.21
+  await clock.advance(130_000)
+  const usage = { input_tokens: 1000, output_tokens: 2100, cache_read_input_tokens: 30_000, cache_creation_input_tokens: 7000, model: 'claude-opus-5-5' }
+  await $.turn.complete({ answer: 'done', durationMs: 130_000, isAborted: false, turnId: 't1', reason: 'answer', usage } as never)
+  await clock.advance(0) // the chips' refresh, which the tiles read
+
+  // Desktop, between turns: the last turn heads the page, its calls listed, and the session's numbers.
+  const panel = await $.ui.mount({ plugin: 'ashpack-status', surface: 'desktop', ...DRAWER, props: PANE_PROPS })
+  const drawn = async () => JSON.stringify(await panel.drawn())
+  let page = await drawn()
+  expect(page).toContain('"key":"ashpack-page:Activity"')
+  for (const part of ['TURN 1', 'DONE', 'fix the login bug', '2m 10s', '$0.21', '38k in · 2.1k out']) expect(page).toContain(part)
+  for (const part of ['src/auth.ts', 'a.ts', '+2', 'false']) expect(page).toContain(part) // the calls
+  for (const part of ['SESSION', '1h 02m', 'TOOL CALLS', '1 failed', '1 file', '$1.21', '41%', 'TIMELINE']) expect(page).toContain(part) // the tiles and chart
+  expect(page).toContain('"label":"▸ #1  fix the login bug · 2m 10s · 3"')
+  // A filter narrows the calls to one kind.
+  await panel.press({ key: 'filter-command' })
+  page = await drawn()
+  expect(page).not.toContain('src/auth.ts')
+  expect(page).toContain('"label":"Command 1"')
+
+  // The next turn runs: it takes the head, working; the first stays a row to bring back.
+  await $.turn.start({ text: 'now add a test', turnId: 't2' } as never)
+  await $.tool.call({ tool: 'Grep', pattern: 'login', tool_use_id: 'g1' } as never)
+  page = await drawn()
+  for (const part of ['TURN 2', 'WORKING', 'now add a test', '<animate']) expect(page).toContain(part)
+  expect(page).toContain('"label":"  #1  fix the login bug · 2m 10s · 3"')
+  await panel.press({ key: 'turn-1' })
+  page = await drawn()
+  expect(page).toContain('TURN 1')
+  expect(page).toContain('"label":"← Back to now"')
+  await panel.press({ key: 'activity-now' })
+  expect(await drawn()).toContain('TURN 2')
+
+  // The terminal: the same page in text.
+  const term = await $.ui.mount({ plugin: 'ashpack-status', surface: 'terminal', ...DRAWER, props: PANE_PROPS })
+  const text = flatten(await term.drawn())
+  for (const part of ['TURN 2 · WORKING', 'Thinking…', '“now add a test”', '✓ FIND  login', 'This session', 'TOOL CALLS', 'CONTEXT', '41%', 'TIMELINE ']) expect(text).toContain(part)
+  await term.unmount()
+
+  await panel.unmount()
+  // Another page up: the Activity tab is its key alone, drawn for nothing.
+  hostPage = 'status'
+  const other = await $.ui.mount({ plugin: 'ashpack-status', surface: 'desktop', ...DRAWER, props: PANE_PROPS })
+  const hidden = JSON.stringify(await other.drawn())
+  expect(hidden).toContain('"key":"ashpack-page:Activity"')
+  expect(hidden).not.toContain('TURN 2')
+  await other.unmount()
+
+  // Without the host, the page has a pane of its own.
+  const own = await $.ui.mount({ plugin: 'ashpack-status', surface: 'terminal', component: 'Pane', requestId: 'ashpack-activity', props: PANE_PROPS })
+  expect(flatten(await own.drawn())).toContain('TURN 2')
+
+  // A /clear starts the page over.
+  await $.session.end({ reason: 'clear', sessionId: 's1', resume: {} } as never)
+  const cleared = flatten(await own.drawn())
+  expect(cleared).toContain('Ready when you are')
+  expect(cleared).not.toContain('TURN 2')
+  expect(cleared).toContain('TURNS0')
+  await own.unmount()
 })

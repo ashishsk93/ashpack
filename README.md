@@ -25,7 +25,7 @@ A mod joins with a single keyed Box; see [ADOPTING.md](ADOPTING.md). No import, 
 | Mod | What it does | Command |
 | --- | --- | --- |
 | **ashpack** | The host: the drawer, the footer button `◆ AshPack ▸`, the strip | `/ashpack [page]` |
-| **ashpack-status** | Status chips (model, branch, context, usage, and repo chips you can turn on) and compact mode with a working popup | `/ashstatus [compact\|chips]` |
+| **ashpack-status** | Status chips (model, branch, context, usage, and repo chips you can turn on), compact mode with a working popup, and an Activity page of every turn's tool calls | `/ashstatus [activity\|compact\|chips]` |
 | **ashpack-skins** | Sixteen skins for prompts, replies, tool rows, cards, charts and the spinner, dark or light | `/skin [name\|on\|off\|dark\|light\|charts on\|charts off]` |
 
 Each works alone; together they share the drawer and the strip. [Baton](https://github.com/ashishsk93/baton-mods) adopts the drawer too.
@@ -54,7 +54,7 @@ The drawer (`◆ AshPack ▸` in the footer, or `/ashpack`), with **Home** and a
 
 <p align="center"><img src="docs/ashpack-status.svg" alt="The status chips, compact mode's working popup, and the Status page" width="880"></p>
 
-One row of chips: model, branch, context and usage, with segment bars that go green, amber, red. Four repo chips start off: the working tree, lines changed, the last commit, and the pull request with its checks. Compact mode folds the tool rows away and shows a popup with the work in progress, a wave loader beside the running step. [Read more.](plugins/ashpack-status/README.md)
+One row of chips: model, branch, context and usage, with segment bars that go green, amber, red. Four repo chips start off: the working tree, lines changed, the last commit, and the pull request with its checks. Compact mode folds the tool rows away and shows a popup with the work in progress, a wave loader beside the running step. The Activity page keeps every turn after the popup closes: the turn in view with its calls, the session's time, calls, lines and spend, a timeline, and a row per turn to bring back. [Read more.](plugins/ashpack-status/README.md)
 
 ## ashpack-skins · sixteen skins
 

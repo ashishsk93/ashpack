@@ -1,6 +1,6 @@
 # ashpack-status
 
-Status chips by the prompt, and compact mode with a working popup. A page of the [AshPack](../ashpack) drawer.
+Status chips by the prompt, compact mode with a working popup, and an Activity page that keeps every turn's tool calls. Pages of the [AshPack](../ashpack) drawer.
 
 <p align="center"><img src="../../docs/ashpack-status.svg" alt="The status chips, compact mode's working popup, and the Status page" width="880"></p>
 
@@ -57,9 +57,48 @@ Hides tool calls, tool groups and progress pills. Replies and the spinner stay. 
 
 In the desktop app the popup takes the chips' place while Claude works, so the two never stack. Press ctrl+o to see everything.
 
+## Activity
+
+The popup closes when the turn ends; the **Activity** page of the drawer keeps it all. Open the drawer, pick Activity and leave it open beside the chat (`/ashstatus activity` opens it).
+
+```
+╭───────────────────────────────────────────────╮
+│ ● TURN 6 · WORKING                     1m 35s │
+│ Running npm test…                    ▂▄▆█▆▄▂▁ │
+│ “build the activity page”                     │
+│ ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ │
+╰───────────────────────────────────────────────╯
+All 9  Read 4  Edit 2  Command 3
+✓ READ  src/auth.ts                         0.1s
+✓ EDIT  src/auth.ts  +12 −3                 1.2s
+✗ RUN   $ npm test                          8.4s
+
+This session
+SESSION          WORKING          TURNS
+1h 02m           21m 22s          6
+TOOL CALLS 3 failed  LINES 9 files  SPEND
+31               +892 −60         $3.84
+CONTEXT ▰▰▰▰▰▰▰▰▱▱▱▱▱▱▱▱▱▱▱▱ 41%
+TIMELINE ▂▅▁▃█▄
+
+▸ #6  build the activity page · working · 9
+  #5  ship it · 10m 10s · 8
+  #4  fix the clipping in the chart · 2m 10s · 4
+```
+
+That is the terminal. The desktop app draws the same page as cards: the turn in view with a coloured edge, a pulsing dot and the wave; its calls with a pill per kind; tiles for the session's numbers; the timeline as bars.
+
+- **The turn in view**: running, what it does now with the wave beside it and the prompt under it; done, the prompt with its time, calls, time spent in tools, cost and tokens. A bar splits its calls by kind, in a hue per kind.
+- **Its calls**: each with how it went, its kind, the file, command, search or page it acted on, an edit's `+N −M`, and how long it took. The filters above narrow them to one kind.
+- **This session**: session time, time working, turns, tool calls (and how many failed), lines added and removed across the files edited, spend, and the context's fill.
+- **Timeline**: a bar per turn, as tall as the turn was long, split by kind.
+- **Turns**: the newest first. Click one to bring it into view; **← Back to now** follows the running turn again.
+
+The desktop app draws the cards as images, in the skin's colours when a skin is on, else light or dark as the app is. The page keeps the last 30 turns of the session; `/clear` and a new session start it over.
+
 ## Settings
 
-The **Status** page of the drawer has the two switches. Under **Status chips**, a row per chip turns each one on or off, and its `↑` `↓` move it: model and effort, branch, context, session limit, weekly limits, folder, cost and time, then the four repo chips, which start off (the desktop app lists no model row, since it draws no model chip). The chips show in the rows' order, and the pick is kept across sessions. `/ashstatus` opens the page, in a pane of its own without the host. `/ashstatus compact` and `/ashstatus chips` flip one.
+The **Status** page of the drawer has the two switches. Under **Status chips**, a row per chip turns each one on or off, and its `↑` `↓` move it: model and effort, branch, context, session limit, weekly limits, folder, cost and time, then the four repo chips, which start off (the desktop app lists no model row, since it draws no model chip). The chips show in the rows' order, and the pick is kept across sessions. `/ashstatus` opens the page, in a pane of its own without the host, and `/ashstatus activity` the Activity page. `/ashstatus compact` and `/ashstatus chips` flip one.
 
 ## Install
 

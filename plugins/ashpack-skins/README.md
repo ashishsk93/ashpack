@@ -6,7 +6,7 @@ Sixteen skins for Claude Code: Catppuccin, Dracula, Nord, Gruvbox, Tokyo Night, 
 
 ## What a skin changes
 
-Text colors only, no painted backgrounds. A skin recolors your prompts, Claude's replies (headings, lists, inline code, links, code, alerts, task lists, charts), the spinner word and the turn footer. It also lends its colours to the other AshPack mods: the drawer's `◆` takes its accent; the status chips, their bars and the working popup take its whole palette (green, amber and red become the skin's own).
+Text colors only, no painted backgrounds. A skin recolors your prompts, Claude's replies (headings, lists, inline code, links, code, alerts, task lists, charts), the spinner word and the turn footer. It also lends its colours to the other AshPack mods: the drawer's `◆` takes its accent; the status chips, their bars and the working popup take its whole palette (green, amber and red become the skin's own), and the Activity page's cards its background and text too.
 
 | | Desktop app | Terminal |
 | --- | --- | --- |

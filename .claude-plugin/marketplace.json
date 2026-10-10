@@ -13,7 +13,7 @@
     {
       "name": "ashpack-status",
       "source": "./plugins/ashpack-status",
-      "description": "Status chips by the prompt and compact mode with a working popup. A page of the AshPack drawer."
+      "description": "Status chips by the prompt, compact mode with a working popup, and an Activity page of every turn's tool calls. Pages of the AshPack drawer."
     },
     {
       "name": "ashpack-skins",

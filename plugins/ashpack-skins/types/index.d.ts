@@ -1,6 +1,19 @@
 // The active skin's colours for the other AshPack mods (status chips, the working popup),
-// by role: ok, warn and hot for levels, then accent, blue and muted.
-export type SharedPalette = { ok: string; warn: string; hot: string; accent: string; blue: string; muted: string }
+// by role: ok, warn and hot for levels, then accent, blue and muted; the card's background
+// and text, and more hues, for the Activity page.
+export type SharedPalette = {
+  ok: string
+  warn: string
+  hot: string
+  accent: string
+  blue: string
+  muted: string
+  bg: string
+  text: string
+  cyan: string
+  pink: string
+  purple: string
+}
 
 declare module 'claude-code' {
   interface PluginState {

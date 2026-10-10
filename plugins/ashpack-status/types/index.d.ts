@@ -2,8 +2,28 @@
 export type CallKind = 'read' | 'edit' | 'command' | 'search' | 'web' | 'agent' | 'skill' | 'tool'
 export type Call = { id: string; kind: CallKind; target: string; state: 'running' | 'ok' | 'failed'; ms?: number; added?: number; removed?: number }
 
-// What the turn is doing: the running step's line, and its calls so far.
-export type Activity = { startedAt: number; label: string; calls: Call[] }
+// What the turn is doing: its number and prompt, the running step's line, its calls so far,
+// and what the session had cost when it began.
+export type Activity = { n: number; prompt: string; startedAt: number; label: string; calls: Call[]; costAtStart?: number }
+
+// A finished turn, kept for the Activity page: what was asked, its calls, how it ended.
+export type Turn = {
+  n: number
+  prompt: string
+  startedAt: number
+  ms: number
+  calls: Call[]
+  outcome: 'answer' | 'aborted' | 'refusal' | 'error'
+  costUsd?: number
+  tokensIn?: number
+  tokensOut?: number
+}
+
+// The session's finished turns added up: kept whole, while the history keeps the latest turns.
+export type Totals = { turns: number; workMs: number; calls: number; failed: number; added: number; removed: number; files: string[] }
+
+// The Activity page's record, one value so a finished turn joins both in one write.
+export type History = { turns: Turn[]; totals: Totals } // turns: the latest, oldest first
 
 // One item of the model's task list (TodoWrite, or TaskCreate/TaskUpdate).
 export type Section = { id: string; title: string; status: 'pending' | 'in_progress' | 'completed' }
@@ -56,6 +76,9 @@ declare module 'claude-code' {
       orderedChips: ChipId[]
       activity: Activity | null
       openCard: CallKind | 'tasks' | null // the popup's card shown open, its calls listed
+      history: History
+      shownTurn: number | null // the Activity page's turn, by number; null follows the latest
+      callFilter: CallKind | 'all' // the Activity page's calls: one kind, or all
       frame: number
       status: StatusData | null
       plan: Section[]
