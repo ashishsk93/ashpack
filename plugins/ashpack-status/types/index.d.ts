@@ -1,5 +1,9 @@
-// What the turn is doing: the running step's line, and the lines of the steps it finished.
-export type Activity = { startedAt: number; label: string; steps: number; trail: string[] }
+// One tool call of the turn, for the working popup: what kind, on what, how it went.
+export type CallKind = 'read' | 'edit' | 'command' | 'search' | 'web' | 'agent' | 'skill' | 'tool'
+export type Call = { id: string; kind: CallKind; target: string; state: 'running' | 'ok' | 'failed'; ms?: number; added?: number; removed?: number }
+
+// What the turn is doing: the running step's line, and its calls so far.
+export type Activity = { startedAt: number; label: string; calls: Call[] }
 
 // One item of the model's task list (TodoWrite, or TaskCreate/TaskUpdate).
 export type Section = { id: string; title: string; status: 'pending' | 'in_progress' | 'completed' }
@@ -51,6 +55,7 @@ declare module 'claude-code' {
       hiddenChips: ChipId[]
       orderedChips: ChipId[]
       activity: Activity | null
+      openCard: CallKind | 'tasks' | null // the popup's card shown open, its calls listed
       frame: number
       status: StatusData | null
       plan: Section[]

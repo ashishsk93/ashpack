@@ -9,10 +9,14 @@ import {
   chipIds,
   chipOrder,
   barSvg,
+  callOf,
+  cardCounts,
   COLORS,
+  editSize,
   effortLabel,
   hiddenChipsOf,
   isBar,
+  latest,
   levelColor,
   operationOf,
   parseCommit,
@@ -24,6 +28,7 @@ import {
   prettyModel,
   segments,
   statusChips,
+  took,
   updateTask,
   wave,
   waveSvg,
@@ -150,23 +155,33 @@ test('helpers: names, bars, colors, git, loader', () => {
   expect(barSvg(42, 4)).toMatch(/^<svg .*opacity="1".*opacity="0.25".*<\/svg>$/)
   expect((barSvg(42, 4).match(/<rect/g) ?? []).length).toBe(4)
 
-  // Sections: the phases with no task list, else the list itself.
-  // No task list: the latest finished steps, then the running one.
-  expect(segments([], 'Thinking', []).map(s => `${s.title}:${s.state}`)).toEqual(['Thinking:now'])
-  expect(segments([], 'Running ls', ['a', 'b', 'c', 'd']).map(s => `${s.title}:${s.state}`)).toEqual([
-    'b:done',
-    'c:done',
-    'd:done',
-    'Running ls:now',
-  ])
+  // The popup's cards: a call's kind and target, counts per kind, an edit's size.
+  expect(callOf('Read', { file_path: '/repo/src/a.ts' }, '/repo')).toEqual({ kind: 'read', target: 'src/a.ts' })
+  expect(callOf('Bash', { command: 'npm\n  test' }, '/repo')).toEqual({ kind: 'command', target: 'npm test' })
+  expect(callOf('Grep', { pattern: 'TODO', path: '/repo/src' }, '/repo')).toEqual({ kind: 'search', target: 'TODO in src' })
+  expect(callOf('mcp__github__search_code', {}, '/repo')).toEqual({ kind: 'tool', target: 'github search_code' })
+  expect(callOf('TodoWrite', {}, '/repo')).toBeNull() // the Tasks card's
+  const calls = [
+    { id: '1', kind: 'read' as const, target: 'a', state: 'ok' as const },
+    { id: '2', kind: 'command' as const, target: 'ls', state: 'ok' as const },
+    { id: '3', kind: 'read' as const, target: 'b', state: 'running' as const },
+  ]
+  expect(cardCounts(calls).map(k => `${k.label} ${k.count}`)).toEqual(['Read 2', 'Command 1'])
+  expect(latest([1, 2, 3, 4], 3)).toEqual({ shown: [2, 3, 4], earlier: 1 })
+  expect(editSize({ structuredPatch: [{ lines: [' a', '-b', '+c', '+d'] }] })).toEqual({ added: 2, removed: 1 })
+  expect(editSize({ type: 'create', content: 'x\ny\n' })).toEqual({ added: 2, removed: 0 })
+  expect(took(400)).toBe('0.4s')
+  expect(took(64_000)).toBe('1m 4s')
+
+  // The task list as rows.
   const todos = planFromTodos([
     { content: 'Read', status: 'completed' },
     { content: 'Fix', status: 'in_progress' },
     { content: 'Test', status: 'pending' },
   ])
-  expect(segments(todos, 'Think', []).map(s => `${s.title}:${s.state}`)).toEqual(['Read:done', 'Fix:now', 'Test:todo'])
+  expect(segments(todos).map(s => `${s.title}:${s.state}`)).toEqual(['Read:done', 'Fix:now', 'Test:todo'])
   const tasks = updateTask(addTask(addTask([], '1', 'One'), '2', 'Two'), { taskId: '1', status: 'completed' })
-  expect(segments(tasks, 'Think', []).map(s => s.state)).toEqual(['done', 'now'])
+  expect(segments(tasks).map(s => s.state)).toEqual(['done', 'now'])
   expect(updateTask(tasks, { taskId: '2', status: 'deleted' }).map(s => s.id)).toEqual(['1'])
 
   // The wave: one bar per cell, moving right a step per frame.
@@ -182,9 +197,9 @@ test('helpers: names, bars, colors, git, loader', () => {
   expect(popupWidth(70)).toBe(48)
   expect(popupWidth(40)).toBe(40)
   const many = planFromTodos(['a', 'b', 'c', 'd', 'e', 'f', 'g'].map((content, i) => ({ content, status: i < 5 ? 'completed' : 'pending' })))
-  expect(around(segments(many, 'x', []), 3).map(s => s.title)).toEqual(['e', 'f', 'g'])
-  expect(around(segments(many.map(s => ({ ...s, status: 'completed' as const })), 'x', []), 3).map(s => s.title)).toEqual(['e', 'f', 'g'])
-  expect(around(segments([], 'x', []), 3).map(s => s.title)).toEqual(['x'])
+  expect(around(segments(many), 3).map(s => s.title)).toEqual(['e', 'f', 'g'])
+  expect(around(segments(many.map(s => ({ ...s, status: 'completed' as const }))), 3).map(s => s.title)).toEqual(['e', 'f', 'g'])
+  expect(around(segments([]), 3)).toEqual([])
 })
 
 test('the Status page toggles compact mode and the chips; compact mode hides tool rows', async ($, on) => {
@@ -432,7 +447,7 @@ test('the status chips draw model, branch, context and usage above the prompt', 
   expect(ran.filter(a => a[0] === 'gh')).toHaveLength(1)
 })
 
-test('compact mode: a half-width popup lists the turn\'s sections as rows, the running one with a loader', async ($, on) => {
+test('compact mode: the popup shows the running step with a wave, a card per kind of call, each opening onto its calls', async ($, on) => {
   mock.store(on)
   // Stands in for the Skins mod, which shares the active skin's accent.
   on('state.get', ($, e, next) => {
@@ -449,27 +464,48 @@ test('compact mode: a half-width popup lists the turn\'s sections as rows, the r
     const { Box } = $.ui.resolve(e)
     return <Box />
   })
-  on('tool.call', () => ({ result: {} }) as never)
+  on('session.cwd', () => ({ value: '/repo' }))
+  // The engine's tools: an edit answers its patch, `false` fails.
+  on('tool.call', ($, e) => {
+    if (e.tool === 'Edit') return { result: { filePath: '/repo/a.ts', structuredPatch: [{ lines: ['-x', '+y', '+z'] }] } } as never
+    if (e.tool === 'Bash' && (e as { command?: string }).command === 'false') return { result: { stdout: '', stderr: 'no' }, isError: true } as never
+    return { result: {} } as never
+  })
   on('turn.start', ($, e) => e as never)
   const footer = await $.ui.mount({ plugin: 'ashpack-status', surface: 'terminal', ...DRAWER, props: PANE_PROPS })
   await footer.press({ key: 'compact' })
   await $.turn.start({ prompt: 'go', turnId: 't1' } as never)
-  const bandProps = { hasSurvey: false, isWorking: true, maxRows: 10, bodyColumns: 120, scroll: { offset: 0, bodyRows: 10, contentRows: 0 }, view: {} } as never
-  // No task list: the finished step, then the running one with the loader beside it.
-  await $.tool.call({ tool: 'Skill', skill: 'verify' } as never)
+  const bandProps = { hasSurvey: false, isWorking: true, maxRows: 14, bodyColumns: 120, scroll: { offset: 0, bodyRows: 14, contentRows: 0 }, view: {} } as never
+  await $.tool.call({ tool: 'Read', file_path: '/repo/src/a.ts', tool_use_id: 'r1' } as never)
+  await $.tool.call({ tool: 'Read', file_path: '/repo/src/b.ts', tool_use_id: 'r2' } as never)
+  await $.tool.call({ tool: 'Bash', command: 'npm test', tool_use_id: 'c1' } as never)
+  await $.tool.call({ tool: 'Bash', command: 'false', tool_use_id: 'c2' } as never)
+  await $.tool.call({ tool: 'Edit', file_path: '/repo/a.ts', old_string: 'x', new_string: 'y', tool_use_id: 'e1' } as never)
   for (const surface of SURFACES) {
-    const trail = await $.ui.mount({ plugin: 'ashpack-status', surface, component: 'AbovePrompt', viewport: FULL, props: bandProps })
-    const drawn = JSON.stringify(await trail.drawn())
-    const text = flatten(await trail.drawn())
+    const band = await $.ui.mount({ plugin: 'ashpack-status', surface, component: 'AbovePrompt', viewport: FULL, props: bandProps })
+    const drawn = JSON.stringify(await band.drawn())
+    const text = flatten(await band.drawn())
     expect(drawn).toContain('"width":60') // half of 120
     expect(text).not.toContain('ctx') // the popup takes the chips' place while Claude works
-    expect(text).toContain('✓ Running /verify')
     expect(text).toContain('▸ Thinking…')
+    // One card per kind, with its count; nothing listed until one is opened.
+    for (const card of ['Read 2', 'Command 2', 'Edit 1']) expect(drawn).toContain(`"label":"${card}"`)
+    expect(text).not.toContain('npm test')
     // The terminal draws the loader as text per frame; the desktop as an SVG that animates itself.
     if (surface === 'terminal') expect(text).toMatch(/[▁▂▃▄▅▆▇█]{3}/)
     else expect(drawn).toContain('<animate ')
     expect(drawn).toContain('#fab387') // the loader wears the skin
-    await trail.unmount()
+    // Opened, the Command card lists its commands, how each went; again, it folds.
+    await band.press({ key: 'card-command' })
+    const open = flatten(await band.drawn())
+    expect(open).toContain('✓ $ npm test')
+    expect(open).toContain('✗ $ false')
+    expect(JSON.stringify(await band.drawn())).toContain('"label":"Command 2 ▾"')
+    await band.press({ key: 'card-edit' })
+    expect(flatten(await band.drawn())).toContain('✓ a.ts  +2 −1')
+    await band.press({ key: 'card-edit' })
+    expect(flatten(await band.drawn())).not.toContain('a.ts')
+    await band.unmount()
   }
 
   await $.tool.call({ tool: 'TodoWrite', todos: [
@@ -479,10 +515,14 @@ test('compact mode: a half-width popup lists the turn\'s sections as rows, the r
   ] } as never)
   const band = await $.ui.mount({ plugin: 'ashpack-status', surface: 'terminal', component: 'AbovePrompt', viewport: FULL, props: bandProps })
   const text = flatten(await band.drawn())
-  for (const part of ['◆ AshPack', '✓ Read the code', '▸ Fix the card', '○ Run tests', '1/3']) expect(text).toContain(part)
-  // One row per section: the order reads top to bottom.
-  expect(text.indexOf('Read the code')).toBeLessThan(text.indexOf('Fix the card'))
-  expect(text.indexOf('Fix the card')).toBeLessThan(text.indexOf('Run tests'))
+  // The task in hand heads the popup; the list is a card of its own, counted.
+  for (const part of ['◆ AshPack', 'Fix the card', '1/3']) expect(text).toContain(part)
+  expect(JSON.stringify(await band.drawn())).toContain('"label":"Tasks 1/3"')
+  expect(text).not.toContain('Run tests')
+  await band.press({ key: 'card-tasks' })
+  const tasks = flatten(await band.drawn())
+  for (const part of ['✓ Read the code', '▸ Fix the card', '○ Run tests']) expect(tasks).toContain(part)
+  expect(tasks.indexOf('Read the code')).toBeLessThan(tasks.indexOf('Run tests'))
   await band.unmount()
   await footer.unmount()
 })
@@ -517,18 +557,17 @@ test('a plugin\'s own tool call is no step of the turn', { plugins: [poller] }, 
   const bandProps = { hasSurvey: false, isWorking: true, maxRows: 10, bodyColumns: 120, scroll: { offset: 0, bodyRows: 10, contentRows: 0 }, view: {} } as never
   const popup = async () => {
     const band = await $.ui.mount({ plugin: 'ashpack-status', surface: 'desktop', component: 'AbovePrompt', viewport: FULL, props: bandProps })
-    const text = flatten(await band.drawn())
+    const drawn = await band.drawn()
     await band.unmount()
-    return text
+    return `${flatten(drawn)} ${JSON.stringify(drawn)}` // the cards are Buttons: their labels are props
   }
   await $.command.run({ command: 'poll', args: '' } as never) // the other mod's poll
   const quiet = await popup()
   expect(quiet).not.toContain('ListAgents')
-  expect(quiet).not.toContain('step')
-  await $.tool.call({ tool: 'Skill', skill: 'verify' } as never)
+  expect(quiet).not.toContain('Tool 1')
+  await $.tool.call({ tool: 'Skill', skill: 'verify', tool_use_id: 's1' } as never)
   const busy = await popup()
-  expect(busy).toContain('Running /verify')
-  expect(busy).toContain('1 step')
+  expect(busy).toContain('Skill 1')
   await footer.unmount()
 })
 

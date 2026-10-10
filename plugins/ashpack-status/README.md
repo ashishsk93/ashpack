@@ -38,12 +38,24 @@ Where they sit: under the prompt in a fullscreen terminal; above it elsewhere, i
 
 ## Compact mode
 
-Hides tool calls, tool groups and progress pills. Replies and the spinner stay. While Claude works, a popup above the prompt, half the width, shows one row per section of the work, at most five:
+Hides tool calls, tool groups and progress pills. Replies and the spinner stay. While Claude works, a popup above the prompt, half the width, shows:
 
-- Claude's task list when it keeps one, with `✓` done, `▸` running, `○` waiting;
-- otherwise the last three finished steps (`✓ Reading format.ts`) and the running one.
+```
+╭──────────────────────────────────────────────╮
+│ ◆ AshPack Fix the chart labels    2/5 · 1m 4s│
+│ ▸ Running npm test…          ▁▂▃▅▇▅▃▂▁▂▃▅    │
+│ Read 4  Edit 2  Command 3 ▾  Tasks 2/5       │
+│ ✓ $ npm run build                       4.2s │
+│ ✗ $ npm test                            2.0s │
+│ ▸ $ npm test -- --watch=false                │
+╰──────────────────────────────────────────────╯
+```
 
-A wave loader sits beside the running row, in the skin's accent when a skin is on. In the desktop app the popup takes the chips' place while Claude works, so the two never stack. Press ctrl+o to see everything.
+- The step running now, with a wave loader beside it (in the skin's accent when a skin is on); the task in hand, when Claude keeps a task list, heads the popup.
+- A card per kind of call this turn, with its count: Read, Edit, Command, Search, Web, Agent, Skill, Tool, and Tasks for the task list.
+- Click a card to list its calls under the cards: the files read, the commands run (`✓` passed, `✗` failed, `▸` running) with how long each took, the files edited with `+N −M`, the tasks with `✓` `▸` `○`. Click it again to fold it. On the terminal, ctrl+x tab focuses the popup and a card's letter opens it (`r` `e` `c` `s` `w` `a` `k` `o` `t`).
+
+In the desktop app the popup takes the chips' place while Claude works, so the two never stack. Press ctrl+o to see everything.
 
 ## Settings
 

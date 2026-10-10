@@ -1,13 +1,16 @@
 import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register, RenderInput, Timer } from 'claude-code'
 
-import type { Activity, ChipId, GitInfo, PullRequest, RepoInfo, Section, StatusData } from '../types'
+import type { Activity, Call, CallKind, ChipId, GitInfo, PullRequest, RepoInfo, Section, StatusData } from '../types'
 import type { Colors, Segment, TextSpan } from './format'
 import {
   addTask,
   around,
+  callOf,
+  cardCounts,
   COLORS,
   describeTool,
+  editSize,
   barPx,
   barSpans,
   barSvg,
@@ -18,6 +21,7 @@ import {
   hiddenChipsOf,
   moveChip,
   isBar,
+  latest,
   operationOf,
   parseCommit,
   parseGit,
@@ -27,7 +31,7 @@ import {
   popupWidth,
   segments,
   statusChips,
-  TRAIL,
+  took,
   updateTask,
   wave,
   waveSvg,
@@ -51,7 +55,7 @@ const GIT_MS = 3000
 const GIT = ['git', '--no-optional-locks'] as const
 const GH_MS = 10_000
 const FRAME_MS = 120
-const POPUP_ROWS = 5 // sections the working popup shows at most
+const MAX_CALLS = 200 // calls a turn's popup keeps, the latest
 const LOADER_PX = 120 // the desktop loader's width, in CSS pixels
 const LOADER_CELLS = 12 // the terminal loader's width at most
 const BLUE = COLORS.blue
@@ -70,6 +74,7 @@ const statusOn = atom({ plugin: 'ashpack-status', key: 'statusOn' } as const, tr
 const hiddenChips = atom({ plugin: 'ashpack-status', key: 'hiddenChips' } as const, [] as ChipId[])
 const orderedChips = atom({ plugin: 'ashpack-status', key: 'orderedChips' } as const, [...CHIP_IDS])
 const activity = atom({ plugin: 'ashpack-status', key: 'activity' } as const, null as Activity | null)
+const openCard = atom({ plugin: 'ashpack-status', key: 'openCard' } as const, null as CallKind | 'tasks' | null)
 const frame = atom({ plugin: 'ashpack-status', key: 'frame' } as const, 0)
 const status = atom({ plugin: 'ashpack-status', key: 'status' } as const, null as StatusData | null)
 const plan = atom({ plugin: 'ashpack-status', key: 'plan' } as const, [] as Section[])
@@ -286,25 +291,50 @@ function loader($: EngineInterface, e: RenderInput<'AbovePrompt'>, f: number, ce
 }
 
 const MARK: Record<Segment['state'], string> = { done: '✓', now: '▸', todo: '○' }
+const CALL_MARK: Record<Call['state'], string> = { running: '▸', ok: '✓', failed: '✗' }
 
-// The working popup, half the band wide: what it is doing, then a row per section,
-// the finished ones ticked and the running one with the loader beside it.
-async function drawPopup($: EngineInterface, e: RenderInput<'AbovePrompt'>, a: Activity | null, now: number) {
+// One call of an open card: its mark, what it acted on (an edit's size), how long it took.
+function callRow($: EngineInterface, e: RenderInput<'AbovePrompt'>, c: Colors, call: Call, inner: number) {
   const { Box, Text } = $.ui.resolve(e)
+  const color = { running: c.accent, ok: c.ok, failed: c.hot }[call.state]
+  const time = call.ms !== undefined ? took(call.ms) : ''
+  return (
+    <Box key={`call-${call.id}`} justifyContent="space-between" columnGap={1}>
+      <Box width={Math.max(10, inner - 8)}>
+        <Text wrap="truncate-end">
+          <Text color={color}>{CALL_MARK[call.state]} </Text>
+          <Text>{call.kind === 'command' ? `$ ${call.target}` : call.target}</Text>
+          {call.added || call.removed ? <Text color={c.ok}>{`  +${call.added ?? 0}`}</Text> : null}
+          {call.added || call.removed ? <Text color={c.hot}>{` −${call.removed ?? 0}`}</Text> : null}
+        </Text>
+      </Box>
+      <Text dimColor>{time}</Text>
+    </Box>
+  )
+}
+
+// The working popup, half the band wide: the running step with the loader beside it, then a
+// card per kind of call (`Read 4`, `Command 3`) and one for the task list. A card pressed
+// open lists its calls (or the tasks) under the cards; pressed again, it folds.
+async function drawPopup($: EngineInterface, e: RenderInput<'AbovePrompt'>, a: Activity | null, now: number) {
+  const { Box, Button, Text } = $.ui.resolve(e)
   const isTerminal = e.surface === 'terminal'
   // Reading `frame` redraws per tick: the terminal only.
-  const [list, f, color, c] = await Promise.all([read($, plan), isTerminal ? read($, frame) : 0, loaderColor($), colorsOf($)])
+  const [list, f, color, c, open] = await Promise.all([read($, plan), isTerminal ? read($, frame) : 0, loaderColor($), colorsOf($), read($, openCard)])
   const width = popupWidth(e.props.bodyColumns)
   const inner = width - 4 // border and padding
   const titleWidth = Math.floor(inner * 0.55)
-  const isTrail = list.length === 0
-  const segs = around(segments(list, a?.label ?? 'Thinking', a?.trail ?? []), POPUP_ROWS)
+  const calls = a?.calls ?? []
   const done = list.filter(s => s.status === 'completed').length
-  const facts = [
-    list.length > 0 ? `${done}/${list.length}` : '',
-    a && isTerminal ? seconds(now - a.startedAt) : '', // the desktop draws no ticks, so the time would stand still
-    a && a.steps > 0 ? `${a.steps} step${a.steps === 1 ? '' : 's'}` : '',
-  ].filter(Boolean)
+  const task = list.find(s => s.status === 'in_progress')
+  const rows = Math.max(2, Math.min(6, e.props.maxRows - 7)) // what fits under the cards
+  const facts = [list.length > 0 ? `${done}/${list.length}` : '', a && isTerminal ? seconds(now - a.startedAt) : ''].filter(Boolean) // the desktop draws no ticks, so the time would stand still
+  const cards = [
+    ...cardCounts(calls).map(k => ({ id: k.kind as CallKind | 'tasks', label: `${k.label} ${k.count}`, hotkey: k.hotkey })),
+    ...(list.length > 0 ? [{ id: 'tasks' as const, label: `Tasks ${done}/${list.length}`, hotkey: 't' }] : []),
+  ]
+  const shownOpen = cards.some(k => k.id === open) ? open : null
+  const opened = shownOpen && shownOpen !== 'tasks' ? latest(calls.filter(x => x.kind === shownOpen), rows) : null
   return (
     <Box flexDirection="column" borderStyle="round" borderColor={c.accent} paddingX={1} width={width}>
       <Box justifyContent="space-between" columnGap={2}>
@@ -312,27 +342,41 @@ async function drawPopup($: EngineInterface, e: RenderInput<'AbovePrompt'>, a: A
           <Text bold color={c.accent}>
             ◆ AshPack
           </Text>
-          {/* The trail's running section names the step; a task list's sections are the tasks. */}
-          {isTrail ? null : <Text> {a?.label ?? 'Working'}…</Text>}
+          {task ? <Text dimColor> {task.title}</Text> : null}
         </Text>
         <Text dimColor>{facts.join(' · ')}</Text>
       </Box>
-      {segs.map((s, i) => (
-        <Box key={`seg-${i}`} columnGap={1}>
-          <Box width={titleWidth}>
-            <Text
-              wrap="truncate-end"
-              bold={s.state === 'now'}
-              color={s.state === 'now' ? c.accent : s.state === 'done' ? c.ok : undefined}
-              dimColor={s.state === 'todo'}
-            >
-              {MARK[s.state]} {s.title}
-              {s.state === 'now' && isTrail ? '…' : ''}
-            </Text>
-          </Box>
-          {s.state === 'now' ? loader($, e, f, inner - titleWidth - 1, color) : null}
+      <Box columnGap={1}>
+        <Box width={titleWidth}>
+          <Text wrap="truncate-end" bold color={c.accent}>
+            ▸ {a?.label ?? 'Thinking'}…
+          </Text>
         </Box>
-      ))}
+        {loader($, e, f, inner - titleWidth - 1, color)}
+      </Box>
+      {cards.length > 0 ? (
+        <Box flexWrap="wrap" columnGap={2}>
+          {cards.map(k => (
+            <Button
+              key={`card-${k.id}`}
+              plain
+              {...(isTerminal ? { hotkey: k.hotkey } : {})}
+              dimColor={shownOpen !== null && shownOpen !== k.id}
+              label={shownOpen === k.id ? `${k.label} ▾` : k.label}
+              onPress={() => update($, openCard, o => (o === k.id ? null : k.id))}
+            />
+          ))}
+        </Box>
+      ) : null}
+      {opened && opened.earlier > 0 ? <Text dimColor>{`  +${opened.earlier} earlier`}</Text> : null}
+      {opened ? opened.shown.map(call => callRow($, e, c, call, inner)) : null}
+      {shownOpen === 'tasks'
+        ? around(segments(list), rows).map((s, i) => (
+            <Text key={`task-${i}`} wrap="truncate-end" bold={s.state === 'now'} color={s.state === 'now' ? c.accent : s.state === 'done' ? c.ok : undefined} dimColor={s.state === 'todo'}>
+              {MARK[s.state]} {s.title}
+            </Text>
+          ))
+        : null}
     </Box>
   )
 }
@@ -470,7 +514,7 @@ export const register: Register = on => {
 
   on('turn.start', async ($, e, next) => {
     const now = await $.clock.now()
-    await update($, activity, () => ({ startedAt: now, label: 'Thinking', steps: 0, trail: [] }))
+    await update($, activity, () => ({ startedAt: now, label: 'Thinking', calls: [] }))
     // A finished task list is the last turn's; a new one starts empty.
     await update($, plan, p => (p.every(s => s.status === 'completed') ? [] : p))
     stopTicker()
@@ -507,17 +551,28 @@ export const register: Register = on => {
     // 20 s) is not, and outside a turn there is nothing to show: no write for either.
     if (next.origin.plugin !== 'engine' || (await read($, activity)) === null) return next(e)
     const label = describeTool(String(e.tool), e)
-    await update($, activity, a => a && { ...a, label, steps: a.steps + 1 })
-    const isMain = !e.agentId // a subagent's list is its own
+    const isMain = !e.agentId // a subagent's list and calls are its own; its Agent card counts it
+    const call = isMain ? callOf(String(e.tool), e, await $.session.cwd().catch(() => '')) : null
+    const id = e.tool_use_id
+    const startedAt = await $.clock.now()
+    await update($, activity, a => a && { ...a, label, calls: call ? [...a.calls, { id, ...call, state: 'running' as const }].slice(-MAX_CALLS) : a.calls })
     if (isMain && e.tool === 'TodoWrite') await update($, plan, () => planFromTodos(e.todos))
     if (isMain && e.tool === 'TaskUpdate') await update($, plan, p => updateTask(p, e))
     const result = await next(e)
     if (isMain && e.tool === 'TaskCreate') {
-      const id = (result.result as { task?: { id?: unknown } } | undefined)?.task?.id
-      if (typeof id === 'string') await update($, plan, p => addTask(p, id, e.subject))
+      const taskId = (result.result as { task?: { id?: unknown } } | undefined)?.task?.id
+      if (typeof taskId === 'string') await update($, plan, p => addTask(p, taskId, e.subject))
     }
-    // The step joins the trail; the line goes back to thinking unless another call took it.
-    await update($, activity, a => a && { ...a, label: a.label === label ? 'Thinking' : a.label, trail: [...a.trail, label].slice(-TRAIL) })
+    // The call settles (failed, or done with an edit's size); the line goes back to thinking
+    // unless another call took it.
+    const ms = (await $.clock.now()) - startedAt
+    const failed = result.deny !== undefined || result.isError === true
+    const size = call?.kind === 'edit' && !failed ? editSize(result.result) : undefined
+    await update($, activity, a => a && {
+      ...a,
+      label: a.label === label ? 'Thinking' : a.label,
+      calls: a.calls.map(x => (x.id === id ? { ...x, state: failed ? ('failed' as const) : ('ok' as const), ms, ...size } : x)),
+    })
     return result
   }).catch(($, e, next) => next(e))
 

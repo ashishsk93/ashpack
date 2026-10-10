@@ -1,4 +1,4 @@
-import type { ChipId, GitInfo, PullRequest, RateWindow, RepoInfo, Section, StatusData } from '../types'
+import type { Call, CallKind, ChipId, GitInfo, PullRequest, RateWindow, RepoInfo, Section, StatusData } from '../types'
 
 // Pure helpers, kept apart from the hooks so the tests can call them directly.
 
@@ -369,19 +369,88 @@ export const waveSvg = (color: string, width: number): string => {
 // The working popup takes half the band, but no less than a readable 48 columns.
 export const popupWidth = (columns: number): number => Math.min(columns, Math.max(48, Math.ceil(columns / 2)))
 
-// ── the working popup: sections ──
+// ── the working popup: a card per kind of call, the running step, the task list ──
 
-// Finished steps the popup keeps before the running one.
-export const TRAIL = 3
+// Calls the popup counts by kind; the task-list tools are the Tasks card instead.
+const PLAN_TOOLS = new Set(['TodoWrite', 'TaskCreate', 'TaskUpdate', 'TaskGet', 'TaskList', 'TaskOutput', 'TaskStop'])
+
+export const CARDS: readonly { kind: CallKind; label: string; hotkey: string }[] = [
+  { kind: 'read', label: 'Read', hotkey: 'r' },
+  { kind: 'edit', label: 'Edit', hotkey: 'e' },
+  { kind: 'command', label: 'Command', hotkey: 'c' },
+  { kind: 'search', label: 'Search', hotkey: 's' },
+  { kind: 'web', label: 'Web', hotkey: 'w' },
+  { kind: 'agent', label: 'Agent', hotkey: 'a' },
+  { kind: 'skill', label: 'Skill', hotkey: 'k' },
+  { kind: 'tool', label: 'Tool', hotkey: 'o' },
+]
+
+// A path as the popup shows it: under the session's folder, relative to it.
+const shortPath = (p: string, cwd: string): string => (cwd && p.startsWith(`${cwd}/`) ? p.slice(cwd.length + 1) : p)
+
+// A tool call's kind and what it acted on; null for the task-list tools.
+export const callOf = (tool: string, input: unknown, cwd: string): { kind: CallKind; target: string } | null => {
+  if (PLAN_TOOLS.has(tool)) return null
+  const i = (input ?? {}) as Record<string, unknown>
+  const str = (k: string) => (typeof i[k] === 'string' ? (i[k] as string) : '')
+  const oneLine = (t: string) => t.replace(/\s+/g, ' ').trim()
+  switch (tool) {
+    case 'Read':
+      return { kind: 'read', target: shortPath(str('file_path'), cwd) }
+    case 'Edit':
+    case 'Write':
+    case 'MultiEdit':
+    case 'NotebookEdit':
+      return { kind: 'edit', target: shortPath(str('file_path') || str('notebook_path'), cwd) }
+    case 'Bash':
+    case 'PowerShell':
+      return { kind: 'command', target: oneLine(str('command')) }
+    case 'Grep':
+    case 'Glob': {
+      const where = str('path') ? ` in ${shortPath(str('path'), cwd)}` : ''
+      return { kind: 'search', target: `${str('pattern')}${where}` }
+    }
+    case 'WebFetch':
+      return { kind: 'web', target: str('url') }
+    case 'WebSearch':
+      return { kind: 'web', target: str('query') }
+    case 'Agent':
+    case 'Task':
+      return { kind: 'agent', target: oneLine(str('description') || str('prompt')) }
+    case 'Skill':
+      return { kind: 'skill', target: `/${str('skill')}` }
+    default:
+      return { kind: 'tool', target: tool.replace(/^mcp__/, '').replace(/__/g, ' ') }
+  }
+}
+
+// An edit's size from its result: lines added and removed (a new file is all added).
+export const editSize = (output: unknown): { added: number; removed: number } | undefined => {
+  const o = (typeof output === 'object' && output !== null ? output : {}) as Record<string, unknown>
+  if (o.type === 'create' && typeof o.content === 'string') return { added: o.content.replace(/\n$/, '').split('\n').length, removed: 0 }
+  if (!Array.isArray(o.structuredPatch)) return undefined
+  const lines = o.structuredPatch.flatMap(h => (Array.isArray((h as { lines?: unknown })?.lines) ? ((h as { lines: unknown[] }).lines) : [])).filter((l): l is string => typeof l === 'string')
+  return { added: lines.filter(l => l.startsWith('+')).length, removed: lines.filter(l => l.startsWith('-')).length }
+}
+
+// The cards to draw: each kind the turn used, in CARDS order, with its count.
+export const cardCounts = (calls: readonly Call[]): { kind: CallKind; label: string; hotkey: string; count: number }[] =>
+  CARDS.map(c => ({ ...c, count: calls.filter(x => x.kind === c.kind).length })).filter(c => c.count > 0)
+
+// The last `n` of a card's calls, and how many came before them.
+export const latest = <T>(items: readonly T[], n: number): { shown: T[]; earlier: number } => ({ shown: items.slice(-n), earlier: Math.max(0, items.length - n) })
+
+// How long a call ran: `0.4s`, `12s`, `1m 4s`.
+export const took = (ms: number): string => {
+  if (ms < 10_000) return `${(ms / 1000).toFixed(1)}s`
+  const s = Math.round(ms / 1000)
+  return s < 60 ? `${s}s` : `${Math.floor(s / 60)}m ${s % 60}s`
+}
 
 export type Segment = { title: string; state: 'done' | 'now' | 'todo' }
 
-// The popup's sections: the model's task list when it keeps one; else the turn's
-// latest finished steps, then the running one.
-export const segments = (plan: readonly Section[], label: string, trail: readonly string[]): Segment[] => {
-  if (plan.length === 0) {
-    return [...trail.slice(-TRAIL).map(title => ({ title, state: 'done' }) as const), { title: label, state: 'now' }]
-  }
+// The task list as rows: done, the running one (else the first waiting), the rest waiting.
+export const segments = (plan: readonly Section[]): Segment[] => {
   const running = plan.findIndex(s => s.status === 'in_progress')
   const at = running >= 0 ? running : plan.findIndex(s => s.status === 'pending')
   return plan.map((s, i) => ({ title: s.title, state: s.status === 'completed' ? 'done' : i === at ? 'now' : 'todo' }))
