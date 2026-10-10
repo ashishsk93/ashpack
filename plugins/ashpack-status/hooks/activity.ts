@@ -1,6 +1,6 @@
 import type { Activity, Call, CallKind, History, StatusData, Totals, Turn } from '../types'
 import type { Colors, Row, TextSpan } from './format'
-import { bar, cardCounts, ellipsis, lasted, latest, LEVELS, levelColor, lineOf, MARK_OF, money, took, waveSvg } from './format'
+import { bar, cardCounts, ellipsis, lasted, latest, LEVELS, levelColor, lineOf, MARK_OF, money, promptTitle, took, waveSvg } from './format'
 
 // The Activity page, pure: the turn history and the session's totals, what the page shows,
 // and its drawings. The desktop gets SVG cards; the terminal, the same facts as text spans.
@@ -146,8 +146,10 @@ export const activityView = (r: {
   c: Colors
   now: number
 }) => {
-  const { turns: list, totals } = r.history
-  const a = r.held && r.held.n > totals.turns ? r.held : null
+  // Turns kept before 0.14.1 hold the raw prompt: titled here too (a title stays the same).
+  const list = r.history.turns.map(t => ({ ...t, prompt: promptTitle(t.prompt) }))
+  const { totals } = r.history
+  const a = r.held && r.held.n > totals.turns ? { ...r.held, prompt: promptTitle(r.held.prompt) } : null
   const pick = list.some(x => x.n === r.picked) ? r.picked : null
   const shown = shownOf(a, list, pick)
   const kinds = shown ? cardCounts(shown.calls) : []

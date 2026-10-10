@@ -94,7 +94,7 @@ That is the terminal. The desktop app draws the same page as cards: the turn in 
 - **Its calls**: the latest 12, each with how it went, its kind, the file, command, search or page it acted on (its first 200 characters), an edit's `+N −M`, and how long it took. **Show more** lists 12 more. The filters above narrow them to one kind; a filter, or another turn, starts the list at 12 again.
 - **This session**: session time (from its first turn), time working, turns, tool calls (and how many failed), lines added and removed across the files edited, spend, and the context's fill.
 - **Timeline**: a bar per turn, as tall as the turn was long, split by kind.
-- **Turns**: the newest first. Click one to bring it into view; **← Back to now** follows the running turn again.
+- **Turns**: the newest first. Click one to bring it into view; **← Back to now** follows the running turn again. Each is titled by your prompt; a turn Claude Code started itself by what started it: `$ cmd` for a `!` command, `/skin nord` for a slash command, a background task's summary, or *Subagent report*.
 
 On the terminal, with the drawer focused, a filter's letter picks it (`l` for All, then the cards' `r` `e` `c` `s` `w` `a` `k` `o`) and `b` is **Back to now**.
 

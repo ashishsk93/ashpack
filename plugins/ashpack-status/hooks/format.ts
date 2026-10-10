@@ -38,6 +38,27 @@ export const ellipsis = (s: string, max: number): string => {
 // one space, since the desktop app refuses a label or an alt that holds a control character.
 export const oneLine = (s: string): string => s.replace(/[\s\u0000-\u001f\u007f-\u009f]+/g, ' ').trim()
 
+// The markup Claude Code wraps round a turn it starts itself: a `!` command, a slash command,
+// a finished background task, a subagent's report, and the reminders that ride along.
+const WRAPPERS = ['system-reminder', 'local-command-caveat', 'local-command-stdout', 'local-command-stderr', 'command-name', 'command-message', 'command-args', 'bash-input', 'bash-stdout', 'bash-stderr', 'task-notification', 'agent-message']
+const WRAPPED = new RegExp(`<(${WRAPPERS.join('|')})\\b[^>]*>[\\s\\S]*?(?:</\\1>|$)`, 'g')
+const tagText = (text: string, tag: string): string | undefined => new RegExp(`<${tag}\\b[^>]*>([\\s\\S]*?)(?:</${tag}>|$)`).exec(text)?.[1]
+
+// What a turn was asked, as a title: the person's own words when there are any, else what
+// started it (`$ cmd`, `/command args`, a background task's summary, a subagent's report),
+// never the markup. A title already made comes back the same.
+export const promptTitle = (text: string): string => {
+  const own = oneLine(text.replace(WRAPPED, ' '))
+  if (own) return own
+  const command = tagText(text, 'command-name')
+  if (command) return oneLine(`${command} ${tagText(text, 'command-args') ?? ''}`)
+  const shell = tagText(text, 'bash-input')
+  if (shell !== undefined) return `$ ${oneLine(shell)}`
+  if (/<task-notification\b/.test(text)) return oneLine(tagText(text, 'summary') ?? '') || 'Background task finished'
+  if (/<agent-message\b/.test(text)) return 'Subagent report'
+  return oneLine(text.replace(/<[^>]*>?/g, ' '))
+}
+
 // "claude-opus-5-5[1m]" -> "Opus 5.5 1M"; "opus[1m]" -> "Opus 1M"
 export const prettyModel = (id: string): string => {
   const ctx = /\[(\w+)\]/.exec(id)?.[1]?.toUpperCase()

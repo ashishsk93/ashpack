@@ -7,7 +7,7 @@ import { activityView, CALL_ROWS, callsSvg, chartSvg, contextRow, heroAlt, heroR
 import { tilesAlt, tilesSvg, timelineRow, turnLabel, turnOf, withTurn } from './activity'
 import type { Colors, Row, TextSpan } from './format'
 import { addTask, barPx, barSpans, barSvg, callOf, callRowOf, chipBarWidth, CHIP_IDS, chipOrder, CHIPS, chunks, COLORS, editSize, ellipsis, GIT_CHIPS } from './format'
-import { hiddenChipsOf, isBar, isColors, isListed, isUnderPrompt, MARK, moveChip, oneLine, operationOf, parseGit, parsePr, planFromTodos, popupView } from './format'
+import { hiddenChipsOf, isBar, isColors, isListed, isUnderPrompt, MARK, moveChip, operationOf, parseGit, parsePr, planFromTodos, popupView, promptTitle } from './format'
 import { printsStash, repoOf, statusChips, statusData, updateTask, wave, waveSvg } from './format'
 
 // AshPack Status. Everything that touches `$` lives in this one file (the engine
@@ -643,7 +643,7 @@ export const register: Register = on => {
     const [now, usage, pick, list] = await Promise.all([$.clock.now(), $.session.usage().catch(() => null), read($, shownTurn), read($, plan)])
     const turns = (await read($, history)).totals.turns
     const cost = usage?.cost ? { costAtStart: usage.cost.usd } : {}
-    await update($, activity, () => ({ n: turns + 1, prompt: ellipsis(oneLine(String(e.text ?? '')), PROMPT_CHARS), startedAt: now, steps: [], calls: [], ...cost }))
+    await update($, activity, () => ({ n: turns + 1, prompt: ellipsis(promptTitle(String(e.text ?? '')), PROMPT_CHARS), startedAt: now, steps: [], calls: [], ...cost }))
     // Following the work, the new turn's calls show whole, not under the last turn's filter.
     if (pick === null) await showCalls($, 'all')
     // A finished task list is the last turn's; a new one starts empty.

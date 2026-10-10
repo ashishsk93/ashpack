@@ -4,7 +4,7 @@ import type { Plugin } from 'claude-code/testing'
 
 import type { Activity, Call, History, Turn } from '../types'
 import { activityView, callsSvg, chartSvg, heroSvg, MAX_CALLS, NO_HISTORY, sessionTiles, settleCall, shownOf, startCall, tilesSvg, withTurn } from './activity'
-import { COLORS, ellipsis, lineOf, moveChip, parseGit, printsStash, TARGET_CHARS } from './format'
+import { COLORS, ellipsis, lineOf, moveChip, parseGit, printsStash, promptTitle, TARGET_CHARS } from './format'
 
 // The Activity page's list and lifecycle, the popup's task list, the command, and the pure
 // helpers under them.
@@ -97,6 +97,20 @@ test('pure: the popup\'s line, the calls kept, the live turn counted once, chips
   expect(ellipsis('😀😀😀', 3)).toBe('😀😀😀')
   expect(ellipsis('😀😀😀😀', 3)).toBe('😀😀…')
   expect(ellipsis('a'.repeat(100_000), 10)).toHaveLength(10)
+})
+
+test('pure: a turn Claude Code started itself is titled by what started it, never its markup', () => {
+  expect(promptTitle('<bash-input>claude plugin update ashpack-status@ashpack</bash-input>')).toBe('$ claude plugin update ashpack-status@ashpack')
+  expect(promptTitle('<agent-message from="a0ce13">\n[Subagent hand-back] The text below')).toBe('Subagent report')
+  const task = '<task-notification>\n<task-id>ae4a</task-id>\n<status>completed</status>\n<summary>Agent "Review" finished</summary>\n</task-notification>'
+  expect(promptTitle(task)).toBe('Agent "Review" finished')
+  expect(promptTitle('<task-notification>\n<task-id>ae4a</task-id>')).toBe('Background task finished') // cut before its summary
+  expect(promptTitle('<command-name>/skin</command-name>\n<command-message>skin</command-message>\n<command-args>nord</command-args>')).toBe('/skin nord')
+  // The person's own words win over the markup round them; their own tags stay.
+  expect(promptTitle('<local-command-caveat>ran directly</local-command-caveat>\n<command-name>/reload-plugins</command-name>\n<local-command-stdout>Reloaded</local-command-stdout>\ngo')).toBe('go')
+  expect(promptTitle('<system-reminder>be careful</system-reminder>\nfix the <div> layout')).toBe('fix the <div> layout')
+  // A title comes back the same.
+  for (const t of ['yes ship it', '$ ls', '/skin nord', 'Agent "Review" finished']) expect(promptTitle(t)).toBe(t)
 })
 
 test('pure: the desktop\'s drawings stay under its 131072-character limit, with no NaN', () => {
