@@ -2,7 +2,7 @@
 
 Status chips by the prompt, compact mode with a working popup, and an Activity page that keeps every turn's tool calls. Pages of the [AshPack](../ashpack) drawer.
 
-<p align="center"><img src="../../docs/ashpack-status.svg" alt="The status chips, compact mode's working popup, the Status page and the Activity page" width="880"></p>
+<p align="center"><img src="../../docs/ashpack-status.webp" alt="ashpack-status: the status chips, compact mode's working popup, the Activity page keeping each turn, and an earlier turn brought back" width="880"></p>
 
 ## Status chips
 

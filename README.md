@@ -46,19 +46,19 @@ Update with `claude plugin marketplace update ashpack`, then `claude plugin upda
 
 ## ashpack · the host
 
-<p align="center"><img src="docs/ashpack.svg" alt="The drawer with a tab per mod, and the strip above the prompt" width="880"></p>
+<p align="center"><img src="docs/ashpack.webp" alt="AshPack: the chips gather in one strip above the prompt, the drawer opens with a tab per mod, each mod's page, and the install command" width="880"></p>
 
 The drawer (`◆ AshPack ▸` in the footer, or `/ashpack`), with **Home** and a tab per mod; the strip above the prompt with a chip per mod; the plugin-order check with its one-click fix. The page shown and the open state are kept across sessions. [Read more.](plugins/ashpack/README.md)
 
 ## ashpack-status · chips and compact mode
 
-<p align="center"><img src="docs/ashpack-status.svg" alt="The status chips, compact mode's working popup, the Status page and the Activity page" width="880"></p>
+<p align="center"><img src="docs/ashpack-status.webp" alt="ashpack-status: the status chips, compact mode's working popup, the Activity page keeping each turn, and an earlier turn brought back" width="880"></p>
 
 One row of chips: model, branch, context and usage, with segment bars that go green, amber, red. Four repo chips start off: the working tree, lines changed, the last commit, and the pull request with its checks. Compact mode folds the tool rows away and shows a popup with the work in progress, a wave loader beside the running step. The Activity page keeps every turn after the popup closes: the turn in view with its calls, the session's time, calls, lines and spend, a timeline, and a row per turn to bring back. [Read more.](plugins/ashpack-status/README.md)
 
 ## ashpack-skins · sixteen skins
 
-<p align="center"><img src="docs/ashpack-skins.svg" alt="The same turn in several skins, then code and table cards" width="880"></p>
+<p align="center"><img src="docs/ashpack-skins.webp" alt="ashpack-skins: one turn re-skinned through Catppuccin, Dracula, Tokyo Night, Gruvbox and GitHub, showing tool rows, diff, terminal, code and table cards, alerts, task lists and charts" width="880"></p>
 
 Catppuccin, Dracula, Nord, Gruvbox, Tokyo Night, Rosé Pine, Solarized, One, Everforest, GitHub, Kanagawa, Monokai, Ayu, Night Owl, Poimandres and Mono, dark or light. The status chips and the working popup draw in the skin's colours too. Text colors only. In the desktop app, tool calls become rows with icons, edits diff cards, shell output terminal cards, and code and tables cards with a Copy button. ` ```mermaid ` fences draw as charts on both surfaces: flowcharts, sequence, state, class and ER diagrams, mind maps, pies, bar and line charts, timelines, Gantt and quadrant charts. Diff fences, alerts and task lists draw too. [Read more.](plugins/ashpack-skins/README.md)
 
@@ -86,9 +86,12 @@ A chip is the same idea in the band above the prompt: a Box keyed `ashpack-chip:
 ```bash
 scripts/new-mod.sh <name> "one-line description" [--page]   # scaffold a mod and list it in the marketplace
 scripts/check.sh [name]                                     # validate, test and type-check every mod, or one
+videos/readme-loops/scripts/render.sh                        # redraw the three README loops from the mods' code
 ```
 
 From a clone: `claude plugin marketplace add /path/to/ashpack`, then `claude plugin install ashpack@ashpack`. Edits apply after `/reload-plugins`.
+
+The README loops are a [HyperFrames](https://hyperframes.heygen.com) project in `videos/readme-loops`: their cards, chips and charts come from the mods' own renderers, so `render.sh` (bun, python3, ffmpeg) redraws them after a UI change.
 
 Mods run in a sandbox with no DOM and no Node. Code that uses `$` must be in the same file as the hook that uses it; pure helpers can live in other files. The type check uses the API types that Claude Code writes; if `check.sh` finds none, set `CLAUDE_CODE_TYPES` to the path of `claude-code.d.ts`.
 

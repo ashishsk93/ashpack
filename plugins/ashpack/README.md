@@ -2,7 +2,7 @@
 
 The host. One drawer and one strip, shared by every mod that adopts them, so mods stop fighting for the footer and the band above the prompt.
 
-<p align="center"><img src="../../docs/ashpack.svg" alt="The drawer with a tab per mod, and the strip above the prompt" width="880"></p>
+<p align="center"><img src="../../docs/ashpack.webp" alt="AshPack: the chips gather in one strip above the prompt, the drawer opens with a tab per mod, each mod's page, and the install command" width="880"></p>
 
 ## Drawer
 

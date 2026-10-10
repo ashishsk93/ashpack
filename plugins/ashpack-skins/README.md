@@ -2,7 +2,7 @@
 
 Sixteen skins for Claude Code: Catppuccin, Dracula, Nord, Gruvbox, Tokyo Night, Rosé Pine, Solarized, One, Everforest, GitHub, Kanagawa, Monokai, Ayu, Night Owl, Poimandres and Mono, each dark and light. A page of the [AshPack](../ashpack) drawer.
 
-<p align="center"><img src="../../docs/ashpack-skins.svg" alt="The same turn in Catppuccin, Dracula, Nord, Gruvbox and GitHub light, then code and table cards" width="880"></p>
+<p align="center"><img src="../../docs/ashpack-skins.webp" alt="ashpack-skins: one turn re-skinned through Catppuccin, Dracula, Tokyo Night, Gruvbox and GitHub, showing tool rows, diff, terminal, code and table cards, alerts, task lists and charts" width="880"></p>
 
 ## What a skin changes
 
