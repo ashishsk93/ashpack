@@ -1,8 +1,14 @@
-import type { Token } from './cards'
+import type { RenderSurface } from 'claude-code'
+
 import type { AlertType, Block } from './markdown'
 import type { Palette } from './skins'
 
 // Pure pieces of a skinned reply's drawing, kept apart from the hooks.
+
+// A Link needs a URL its surface opens: the terminal these schemes, the others https alone.
+// Anything else stays text, underlined.
+export const isUrl = (href: string, surface: RenderSurface): boolean =>
+  href.length <= 2048 && (surface === 'terminal' ? /^(https?|mailto|file):/i : /^https:/i).test(href)
 
 // Shell fences stay the desktop app's own block, which carries its Run button.
 export const SHELLS = new Set(['bash', 'sh', 'zsh', 'fish', 'shell', 'console', 'shellsession', 'powershell', 'ps1', 'pwsh', 'cmd', 'bat'])
@@ -11,9 +17,12 @@ export const ALERT_TITLE: Record<AlertType, string> = { note: 'Note', tip: 'Tip'
 
 export const alertColor = (p: Palette, type: AlertType): string => ({ note: p.blue, tip: p.green, important: p.purple, warning: p.yellow, caution: p.red })[type]
 
-// A code token's colour, as the code cards colour it.
-export const roleColor = (p: Palette, role: Token['role']): string =>
-  ({ plain: p.text, comment: p.muted, string: p.green, number: p.yellow, keyword: p.purple })[role]
+// A code block as markdown again, for the app's own drawing: its fence longer than any
+// run of backticks inside it.
+export const fenceOf = (lang: string, code: string): string => {
+  const ticks = '`'.repeat(Math.max(3, ...[...code.matchAll(/`+/g)].map(m => m[0].length + 1)))
+  return `${ticks}${lang}\n${code}\n${ticks}`
+}
 
 // For the first task item of a list, the list's tasks: how many, how many done (nested
 // items and plain ones between them still belong to the list). Null for any other block.

@@ -1,12 +1,14 @@
+import type { On } from 'claude-code'
 import { expect, mock, test } from 'claude-code/testing'
+import type { Engine } from 'claude-code/testing'
 
 import { chartRows } from './chart-cells'
 import { niceStep, chartSvg } from './charts'
 import { shortNumber, wrapWords } from './chart-kit'
 import { layoutFlow } from './flow-layout'
-import { diffFence, newSide } from './cards'
+import { clean, codeSvg, diffFence, diffSvg, newSide, shellOf, shellText, tableOf, terminalSvg } from './cards'
 import { parseBlocks, parseInline } from './markdown'
-import { taskRun } from './reply'
+import { fenceOf, taskRun } from './reply'
 import { parseChart, parseFlow, parsePie, parseSequence, parseXY } from './mermaid'
 import { cardLayout, duration, isLightTheme, kindOf, pick, pixelRows, pixelSvg, pixelWidth, SKINS, targetOf, themeFor, toolLabel } from './skins'
 
@@ -60,24 +62,24 @@ test('helpers', () => {
 test('markdown: inline spans and blocks', () => {
   expect(parseInline('a **b** `c` *d* [e](https://x.dev) snake_case_name _f_')).toEqual([
     { text: 'a ', kind: 'plain' },
-    { text: 'b', kind: 'bold' },
+    { text: 'b', kind: 'plain', bold: true },
     { text: ' ', kind: 'plain' },
     { text: 'c', kind: 'code' },
     { text: ' ', kind: 'plain' },
-    { text: 'd', kind: 'italic' },
+    { text: 'd', kind: 'plain', italic: true },
     { text: ' ', kind: 'plain' },
     { text: 'e', kind: 'link', href: 'https://x.dev' },
     { text: ' snake_case_name ', kind: 'plain' },
-    { text: 'f', kind: 'italic' },
+    { text: 'f', kind: 'plain', italic: true },
   ])
   const blocks = parseBlocks(
     ['# Title', 'one', 'line', '', '- a', '  - b', '1. c', '> q', '---', '```ts', 'const x = 1', '```', '| h | i |', '|---|---|', '| 1 | 2 |', '', '```py', 'open'].join('\n'),
   )
-  expect(blocks.map(b => b.kind)).toEqual(['heading', 'para', 'item', 'item', 'item', 'quote', 'rule', 'code', 'markdown', 'code'])
+  expect(blocks.map(b => b.kind)).toEqual(['heading', 'para', 'item', 'item', 'item', 'quote', 'rule', 'code', 'table', 'code'])
   expect(blocks[1]).toEqual({ kind: 'para', spans: [{ text: 'one line', kind: 'plain' }] })
   expect(blocks.slice(2, 5).map(b => (b.kind === 'item' ? `${b.marker}${b.depth}` : ''))).toEqual(['•0', '•1', '1.0'])
   expect(blocks[7]).toEqual({ kind: 'code', lang: 'ts', code: 'const x = 1', isClosed: true })
-  expect(blocks[8]).toEqual({ kind: 'markdown', text: '| h | i |\n|---|---|\n| 1 | 2 |' })
+  expect(blocks[8]).toEqual({ kind: 'table', text: '| h | i |\n|---|---|\n| 1 | 2 |' })
   expect(blocks[9]).toEqual({ kind: 'code', lang: 'py', code: 'open', isClosed: false }) // a fence still streaming
 })
 
@@ -286,7 +288,6 @@ test('the desktop draws tool rows, group rows, diff and terminal cards; the spin
     await mount('terminal', 'ToolUse', { tool_use_id: 'e1', tool: 'Edit', input: { file_path: '/repo/src/auth.ts' }, isRunning: false, isErrored: false, isInterrupted: false }),
   )
   expect(plain).toContain('src/auth.ts')
-  expect(plain).not.toContain('●')
 
   const calls = [
     { tool: 'Bash', input: { command: 'ls' }, isRunning: false, isErrored: false, isInterrupted: false },
@@ -609,4 +610,165 @@ test('the skin shares its palette with the other AshPack mods', async ($, on) =>
   expect(shared).toEqual({ ok: p.green, warn: p.yellow, hot: p.red, accent: p.accent, blue: p.blue, muted: p.muted, bg: p.bg, text: p.text, cyan: p.cyan, pink: p.pink, purple: p.purple })
   await $.command.run({ command: 'skin', args: 'off' } as never)
   expect(shared).toBeNull()
+})
+
+// A reply's setup: the store, the theme, the engine's own reply and copies, a skin picked.
+const replySetup = async ($: Engine, on: On) => {
+  mock.store(on)
+  mock.clock(on, { now: 0 })
+  on('config.list', () => ({ value: [{ key: 'theme', value: 'dark' }] }) as never)
+  on('ui.render', { component: 'AssistantMessage' }, ($, e) => {
+    const { Text } = $.ui.resolve(e)
+    return <Text>engine-reply</Text>
+  })
+  const copied: string[] = []
+  on('ui.copy', ($, e) => (copied.push(e.text), { value: { isCopied: true } }) as never)
+  on('ui.toast', () => ({ value: undefined }))
+  await $.command.run({ command: 'skin', args: 'dracula' } as never)
+  const mount = (surface: 'terminal' | 'desktop', text: string, columns = 120) =>
+    $.ui.mount({ plugin: 'ashpack-skins', surface, component: 'AssistantMessage', props: { text, isFirstOfReply: true } as never, viewport: { columns, rows: 40 } as never })
+  return { copied, mount }
+}
+
+test('cards stay under the app\'s Svg limit: long code folds, a card too big is the app\'s own block', async ($, on) => {
+  const { copied, mount } = await replySetup($, on)
+  const fence = (lang: string, code: string) => `\`\`\`${lang}\n${code}\n\`\`\``
+  const code = Array.from({ length: 300 }, (_, i) => `const v${i} = f("item", ${i}) // ${i}`).join('\n')
+  const table = ['| id | name | note |', '|---|---|---|', ...Array.from({ length: 300 }, (_, i) => `| ${i} | n${i} | row ${i} |`)].join('\n')
+  const dense = Array.from({ length: 100 }, () => Array.from({ length: 60 }, (_, i) => i).join(',')).join('\n')
+  for (const [text, copy, folds] of [[fence('ts', code), code, '⋯ 100 more lines'], [table, table, '⋯ 101 more rows'], [fence('ts', dense), '', null]] as const) {
+    const reply = await mount('desktop', text)
+    const svgs = await reply.findAll({ type: 'Svg' })
+    const own = await reply.findAll({ type: 'Markdown' })
+    expect(svgs.length + own.length).toBe(1)
+    for (const s of svgs) {
+      expect(String(s.props.source).length).toBeLessThanOrEqual(131_072)
+      expect(Number(s.props.height)).toBeLessThanOrEqual(4096)
+    }
+    // Long code and tables fold into a card, whose Copy keeps every line; a card past the
+    // app's limits is the app's own block.
+    if (folds) {
+      expect(svgs[0]?.props.source).toContain(folds)
+      await reply.press({ key: 'copy-block-0' })
+      expect(copied.at(-1)).toBe(copy)
+    } else expect(own[0]?.props.text).toBe(text)
+    await reply.unmount()
+  }
+})
+
+test('control characters never reach a card: escapes, links, progress output', () => {
+  const p = SKINS[0]!.dark
+  expect(clean('\u001b(B\u001b[m\u0007ok\u001b[1;31m!\u001b[0m\u009b￾\t\n')).toBe('ok!\t\n') // tabs and newlines stay
+  expect(clean('see \u001b]8;;https://x.dev\u0007docs\u001b]8;;\u0007 and \u001b]8;;https://y.dev\u001b\\more\u001b]8;;\u001b\\')).toBe('see docs and more')
+  const shell = shellOf({ stdout: 'build\n10%\r50%\r100%\r\n\u001b[32mdone\u001b[0m\u001b(B\n', stderr: '\u001b]0;title\u0007warn\u0001', interrupted: false }, 'npm run build', false)!
+  expect(shellText(shell)).toBe('build\n100%\ndone\nwarn')
+  const card = terminalSvg(shell, p, 720)
+  for (const t of [card.source, card.alt]) expect(t).not.toMatch(/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f-\u009f]/)
+  expect(card.source).toContain('>100%<')
+  expect(card.source).not.toContain('50%')
+  expect(codeSvg('', 'a\u001b[1mb\u0000', p, 720).alt).toBe('ab') // every card's alt
+})
+
+test('markdown: marks nest, fences take info and longer runs, items and quotes go on', () => {
+  expect(parseInline('**`file.ts`** and [**x**](https://u.dev) *see `a`*')).toEqual([
+    { text: 'file.ts', kind: 'code', bold: true },
+    { text: ' and ', kind: 'plain' },
+    { text: 'x', kind: 'link', href: 'https://u.dev' },
+    { text: ' ', kind: 'plain' },
+    { text: 'see ', kind: 'plain', italic: true },
+    { text: 'a', kind: 'code', italic: true },
+  ])
+  const code = (md: string) => parseBlocks(md).filter(b => b.kind === 'code')
+  expect(code('```ts title="a.ts"\nx\n```')).toEqual([{ kind: 'code', lang: 'ts', code: 'x', isClosed: true }])
+  expect(code('````md\n```ts\nx\n```\n````')).toEqual([{ kind: 'code', lang: 'md', code: '```ts\nx\n```', isClosed: true }])
+  expect(code('~~~\n```\nstill\n~~~')).toEqual([{ kind: 'code', lang: '', code: '```\nstill', isClosed: true }])
+  // A fence inside a list item loses the item's indent; an indented line goes on with its item.
+  const listed = parseBlocks(['1. Run it:', '   ```sh', '   npm test', '     --watch', '   ```', '- one', '  goes on', '- two'].join('\n'))
+  expect(listed.map(b => b.kind)).toEqual(['item', 'code', 'item', 'item'])
+  expect(listed[1]).toEqual({ kind: 'code', lang: 'sh', code: 'npm test\n  --watch', isClosed: true })
+  expect(listed[2]).toMatchObject({ kind: 'item', spans: [{ text: 'one goes on', kind: 'plain' }] })
+  // `>` lines are one quote, a bare `>` between its paragraphs.
+  expect(parseBlocks('> a\n> b\n>\n> c')).toEqual([{ kind: 'quote', lines: [[{ text: 'a b', kind: 'plain' }], [{ text: 'c', kind: 'plain' }]] }])
+  // A table's cells as plain text; the app's own block gets a fence longer than any inside.
+  expect(tableOf('| [a](https://u.dev) | *b* | x<br>y |\n|---|---|---|\n| **c** | _d_ | `e\\|f` |')).toEqual({ header: ['a', 'b', 'x y'], rows: [['c', 'd', 'e|f']] })
+  expect(fenceOf('md', 'a\n```\nb')).toBe('````md\na\n```\nb\n````')
+  // A diff fence without `@@` has no line numbers to show.
+  const p = SKINS[0]!.dark
+  const bare = diffFence('-a\n+b')!
+  expect(bare.hunks[0]).toMatchObject({ oldStart: 0, newStart: 0 })
+  expect(diffSvg(bare, 'diff', p, 720).source).not.toContain('fill-opacity=".7"')
+  expect(diffSvg(diffFence('@@ -3 +3 @@\n-a\n+b')!, 'diff', p, 720).source).toContain('fill-opacity=".7"')
+})
+
+test('a rule spans the reply up to 80 cells; a link is a Link only where the surface opens it', async ($, on) => {
+  const { mount } = await replySetup($, on)
+  const text = 'a\n\n---\n\n[site](https://x.dev) [plain](http://y.dev) [mail](mailto:a@b.c)'
+  for (const [columns, width] of [[40, 36], [200, 80]] as const) {
+    const drawn = JSON.stringify(await (await mount('terminal', text, columns)).drawn())
+    expect(drawn).toContain('─'.repeat(width))
+    expect(drawn).not.toContain('─'.repeat(width + 1))
+  }
+  const hrefs = async (surface: 'terminal' | 'desktop') => (await (await mount(surface, text)).findAll({ type: 'Link' })).map(l => l.props.href)
+  expect(await hrefs('terminal')).toEqual(['https://x.dev', 'http://y.dev', 'mailto:a@b.c'])
+  expect(await hrefs('desktop')).toEqual(['https://x.dev']) // the rest stay underlined text
+})
+
+test('a switch writes only what changed', async ($, on) => {
+  mock.store(on)
+  let theme = 'dark'
+  on('config.list', () => ({ value: [{ key: 'theme', value: theme }] }) as never)
+  on('config.set', ($, e) => ((theme = String(e.value)), { value: e.value }) as never)
+  const writes: string[] = []
+  on('state.set', ($, e, next) => (writes.push(e.key), next(e)))
+  await $.command.run({ command: 'skin', args: 'dracula' } as never)
+  writes.splice(0)
+  // Setting the theme comes back through the skin's own config.set hook: isLight is written once.
+  await $.command.run({ command: 'skin', args: 'light' } as never)
+  expect(writes.filter(k => k === 'isLight')).toEqual(['isLight'])
+  writes.splice(0)
+  await $.command.run({ command: 'skin', args: 'dracula' } as never)
+  await $.command.run({ command: 'skin', args: 'light' } as never)
+  expect(writes).toEqual([])
+})
+
+test('a call is timed in one write while a desktop draws; a failed or PowerShell command gets the terminal card', async ($, on) => {
+  mock.store(on)
+  mock.clock(on, { now: 0 })
+  on('config.list', () => ({ value: [{ key: 'theme', value: 'dark' }] }) as never)
+  on('session.cwd', () => ({ value: '/repo' }) as never)
+  let surfaces = ['terminal']
+  on('session.surfaces', () => ({ value: surfaces }) as never)
+  const ids: string[] = []
+  on('tool.call', ($, e) => (ids.push(e.tool_use_id), { result: { stdout: '', stderr: '', interrupted: false } }) as never)
+  const writes: string[] = []
+  on('state.set', ($, e, next) => (writes.push(e.key), next(e)))
+  on('ui.render', { component: 'ToolResult' }, ($, e) => {
+    const { Text } = $.ui.resolve(e)
+    return <Text>engine-result</Text>
+  })
+  const copied: string[] = []
+  on('ui.copy', ($, e) => (copied.push(e.text), { value: { isCopied: true } }) as never)
+  on('ui.toast', () => ({ value: undefined }))
+  await $.command.run({ command: 'skin', args: 'nord' } as never)
+  writes.splice(0)
+  await $.tool.call({ tool: 'Bash', command: 'npm test' } as never)
+  expect(writes).toEqual([]) // only the terminal draws: it shows neither
+  surfaces = ['terminal', 'desktop']
+  await $.tool.call({ tool: 'Bash', command: 'npm test' } as never)
+  await $.tool.call({ tool: 'TodoWrite', todos: [] } as never) // a row the skin leaves to Claude Code
+  expect(writes).toEqual(['call'])
+
+  const id = ids[1]!
+  const result = (tool: string, output: unknown, isErrored: boolean) =>
+    $.ui.mount({ plugin: 'ashpack-skins', surface: 'desktop', component: 'ToolResult', requestId: id, props: { tool_use_id: id, tool, output, isErrored }, viewport: { columns: 120, rows: 40 } } as never)
+  const failed = await result('Bash', 'Exit code 1\nnpm ERR! missing script: test', true)
+  const drawn = JSON.stringify(await failed.drawn())
+  for (const part of ['"type":"Svg"', 'failed', '$ npm test', 'npm ERR! missing script: test']) expect(drawn).toContain(part)
+  expect(drawn).not.toContain('Exit code')
+  await failed.press({ key: `copy-${id}` })
+  expect(copied.at(-1)).toBe('npm ERR! missing script: test')
+  await failed.unmount()
+  const ps = JSON.stringify(await (await result('PowerShell', { stdout: 'Get-Item ok', stderr: '', interrupted: false }, false)).drawn())
+  expect(ps).toContain('Get-Item ok')
+  expect(ps).not.toContain('engine-result')
 })

@@ -6,12 +6,12 @@ Sixteen skins for Claude Code: Catppuccin, Dracula, Nord, Gruvbox, Tokyo Night, 
 
 ## What a skin changes
 
-Text colors only, no painted backgrounds. A skin recolors your prompts, Claude's replies (headings, lists, inline code, links, code, alerts, task lists, charts), the spinner word and the turn footer. It also lends its colours to the other AshPack mods: the drawer's `◆` takes its accent; the status chips, their bars and the working popup take its whole palette (green, amber and red become the skin's own), and the Activity page's cards its background and text too.
+In the transcript a skin recolors text only and paints no backgrounds; the cards (code, tables, diffs, shell output) are outlined, with faint tints on some rows. A skin recolors your prompts, Claude's replies (headings, lists, inline code, links, code, alerts, task lists, charts), the spinner word and the turn footer. It also lends its colours to the other AshPack mods: the drawer's `◆` takes its accent; the status chips, their bars and the working popup take its whole palette (green, amber and red become the skin's own), and the Activity page's cards its background and text too.
 
 | | Desktop app | Terminal |
 | --- | --- | --- |
 | Tool calls | A row with a line icon for its kind (a spinning ring while it runs), the target, lines changed, time taken | A plain row |
-| Runs of calls | One row, `Run 2 · Read 3` | Claude Code's own |
+| Runs of calls | One row, the most frequent kind first: `Read 3 · Run 2` | Claude Code's own |
 | Edits | A diff card: `+N −M`, changed lines in green and red | Claude Code's own |
 | Shell commands | A terminal card: status, output, stderr apart, long output folded, Copy | Claude Code's own |
 | Tables in replies | A card, with Copy | An outlined grid |
@@ -25,6 +25,14 @@ Text colors only, no painted backgrounds. A skin recolors your prompts, Claude's
 | Your prompts | A rounded outline sized to what you typed | The same |
 
 Cards are still: the desktop app keeps a message's first drawing and re-mounts it on every layout change, so an entry animation would replay each time. With ashpack-status' compact mode on, tool rows are not drawn. The stored conversation does not change, and the model reads nothing new except the charts note below.
+
+### Limits
+
+- "Desktop app" in the table means every surface but the terminal: the desktop app, the mobile app and the VS Code extension.
+- A reply over 20,000 characters, a prompt over 4,000 characters, and a prompt with images keep Claude Code's own drawing.
+- Rows are drawn for Read, Edit, MultiEdit, Write, NotebookEdit, Bash, PowerShell, Grep, Glob, WebFetch, WebSearch and MCP tools. Agents, todos, plan mode and other tools keep Claude Code's own rows, which show live progress.
+- Code and tables past 200 lines fold, with `⋯ N more lines` at the end; Copy still takes every line. A card too big for the app to draw keeps Claude Code's own block (a chart, its code).
+- `/skin charts` with no argument turns charts on or off.
 
 ## Charts
 
@@ -56,7 +64,7 @@ Three switches sit above the cards:
 - **Dark / Light** (`m`) picks the skin's dark or light palette and sets Claude Code's theme to match (`dark-ansi` becomes `light-ansi`). The desktop app keeps its own appearance, so pick the mode that matches it.
 - **Charts on / Charts off** draws ` ```mermaid ` fences as charts, or leaves them as code.
 
-Without the picker: `/skin <name>`, `/skin on`, `/skin off`, `/skin dark`, `/skin light`, `/skin charts on`, `/skin charts off`. Your choices are kept across sessions, and the skin follows `/theme`.
+Without the picker: `/skin <name>`, `/skin on`, `/skin off`, `/skin dark`, `/skin light`, `/skin charts on`, `/skin charts off`, or `/skin charts` to switch. Your choices are kept across sessions, and the skin follows `/theme`.
 
 ## Install
 

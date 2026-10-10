@@ -200,6 +200,14 @@ export const kindOf = (tool: string): Kind | null => (tool.startsWith('mcp__') ?
 export const kindColor = (p: Palette, kind: Kind): string =>
   ({ read: p.blue, write: p.yellow, run: p.green, search: p.purple, web: p.cyan, mcp: p.pink })[kind]
 
+export const KIND_NAME: Record<Kind, string> = { read: 'Read', write: 'Edit', run: 'Run', search: 'Search', web: 'Web', mcp: 'MCP' }
+
+type CallState = { isRunning: boolean; isErrored: boolean; isInterrupted: boolean }
+
+// A call's mark colour: red when it failed, muted while it runs or once interrupted.
+export const stateColor = (p: Palette, kind: Kind, s: CallState): string =>
+  s.isErrored ? p.red : s.isRunning || s.isInterrupted ? p.muted : kindColor(p, kind)
+
 // `mcp__github__search_code` reads as `github:search_code`.
 export const toolLabel = (tool: string): string => {
   if (!tool.startsWith('mcp__')) return tool
@@ -224,6 +232,9 @@ export const duration = (ms: number): string => {
   const s = Math.max(0, Math.round(ms / 1000))
   return s < 60 ? `${s}s` : `${Math.floor(s / 60)}m ${s % 60}s`
 }
+
+// How long a call took: `0.4s`, `12s`, `1m 4s`.
+export const took = (ms: number): string => (ms < 10_000 ? `${(ms / 1000).toFixed(1)}s` : duration(ms))
 
 // How many picker cards share a row at this width (24 columns fit the mock), and how wide each is.
 const MIN_CARD = 24

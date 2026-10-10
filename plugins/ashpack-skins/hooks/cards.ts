@@ -1,9 +1,10 @@
+import { parseInline } from './markdown'
 import type { Palette } from './skins'
 
 // Cards the desktop app draws as images: code, tables, diffs and shell output. Pure:
 // the data each card shows, then its SVG. A card is an outline with no fill, so the page
-// shows through; its rows rise in only when it is new (`animate`), so a redraw of the
-// same card (a resize, the side panel opening) does not play it again.
+// shows through, with faint tints on some rows. It is still: the desktop app re-mounts a
+// message's first tree on every layout change, so an entry animation would replay.
 
 // ── what the cards show ──
 
@@ -38,8 +39,8 @@ export const diffOf = (output: unknown): Diff | null => {
   }
 }
 
-// A ```diff fence as a diff: its hunks by their `@@` lines (one from line 1 without any),
-// the file from its `+++`/`---` lines. Null when it changes nothing.
+// A ```diff fence as a diff: its hunks by their `@@` lines (lines before any, a hunk from 0
+// on both sides: no line numbers), the file from its `+++`/`---` lines. Null when it changes nothing.
 export const diffFence = (text: string): Diff | null => {
   // The file: the new side's name, or the old side's for a deleted one; several files say so.
   const names = [...text.matchAll(/^\+\+\+ (?:b\/)?(.+)$/gm)].map(m => m[1]?.trim() ?? '')
@@ -56,7 +57,7 @@ export const diffFence = (text: string): Diff | null => {
       inHeader = false
     } else if (line.startsWith('diff ')) inHeader = true
     else if (!(inHeader && HEADER.test(line))) {
-      if (hunks.length === 0) hunks.push({ oldStart: 1, newStart: 1, lines: [] })
+      if (hunks.length === 0) hunks.push({ oldStart: 0, newStart: 0, lines: [] })
       // Tabs as four spaces: the card's text and the terminal both draw them as one otherwise.
       const kept = line.replace(/\t/g, '    ')
       hunks.at(-1)?.lines.push(/^[+\- ]/.test(kept) ? kept : ` ${kept}`)
@@ -72,18 +73,29 @@ export const diffFence = (text: string): Diff | null => {
 export const newSide = (d: Diff): string =>
   d.hunks.flatMap(h => h.lines.filter(l => !l.startsWith('-')).map(l => l.slice(1))).join('\n')
 
+// A shell call's result. A failed call's output is the text the model read: an `Exit code N`
+// line, then what the command printed.
 export const shellOf = (output: unknown, command: string, isErrored: boolean): Shell | null => {
+  if (typeof output === 'string') return isErrored ? { command, stdout: '', stderr: output.replace(/^Exit code -?\d+[^\n]*\n?/, ''), status: 'failed' } : null
   const o = record(output)
   if (typeof o.stdout !== 'string' || typeof o.stderr !== 'string') return null
   const status = o.interrupted === true ? 'interrupted' : typeof o.timedOutAfterMs === 'number' ? 'timed out' : isErrored ? 'failed' : 'ok'
   return { command, stdout: o.stdout, stderr: o.stderr, status }
 }
 
-const ANSI = /\u001b\[[0-9;?]*[A-Za-z]/g
+// What a card cannot draw and the desktop refuses in an alt: OSC strings (titles, links) to
+// their BEL or ST, CSI (colours, cursor moves), other escapes (`ESC ( B`), then any other control.
+const CONTROL = /\u001b\][^\u0007\u001b\u009c\n]*(?:\u0007|\u001b\\|\u009c)?|\u001b\[[0-?]*[ -/]*[@-~]|\u001b[ -/]*[0-~]|[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f-\u009f\ufffe\uffff]/g
+export const clean = (t: string): string => t.replace(CONTROL, '')
+
 export type Line = { text: string; isErr: boolean } | { fold: number }
 
+// A stream as a terminal leaves it: each line what its last `\r` wrote (progress output),
+// the blank lines at its end dropped.
 const streamLines = (text: string, isErr: boolean) => {
-  const lines = text.replace(ANSI, '').replace(/\r/g, '').replace(/\t/g, '  ').split('\n')
+  const lines = clean(text)
+    .split('\n')
+    .map(l => l.split('\r').filter(s => s !== '').at(-1) ?? '')
   const last = lines.map(l => l.trim() !== '').lastIndexOf(true)
   return lines.slice(0, last + 1).map(line => ({ text: line, isErr }))
 }
@@ -94,19 +106,39 @@ export const outputLines = (s: Shell, head = 8, tail = 8): Line[] => {
   return kept.length <= head + tail + 1 ? kept : [...kept.slice(0, head), { fold: kept.length - head - tail }, ...kept.slice(-tail)]
 }
 
-// A markdown table's cells; null when the lines are not one.
-export const tableOf = (markdown: string): Table | null => {
+// All the output as the card reads it, nothing folded: what its Copy takes.
+export const shellText = (s: Shell): string =>
+  [s.stdout, s.stderr]
+    .map(t => streamLines(t, false).map(l => l.text).join('\n'))
+    .filter(t => t.trim() !== '')
+    .join('\n')
+
+// A markdown table's cells as plain text: marks off, a link as its text, `<br>` a space.
+export const tableOf = (markdown: string): Table => {
   const cells = (line: string) =>
     line
       .trim()
       .replace(/^\|/, '')
       .replace(/(?<!\\)\|$/, '')
       .split(/(?<!\\)\|/)
-      .map(c => c.replace(/\*\*|__|`/g, '').replace(/\\\|/g, '|').trim())
-  const [head, , ...rest] = markdown.split('\n').filter(l => l.trim() !== '')
-  if (!head) return null
+      .map(c =>
+        parseInline(c.replace(/<br\s*\/?>/gi, ' '))
+          .map(s => s.text)
+          .join('')
+          .replace(/\\\|/g, '|')
+          .trim(),
+      )
+  const [head = '', , ...rest] = markdown.split('\n').filter(l => l.trim() !== '')
   const header = cells(head)
-  return { header, rows: rest.map(r => Array.from({ length: header.length }, (_, i) => cells(r)[i] ?? '')) }
+  return { header, rows: rest.map(cells).map(r => Array.from({ length: header.length }, (_, i) => r[i] ?? '')) }
+}
+
+// Each column's width in characters: its longest cell, all scaled down together to fit
+// `room` with `gap` between them, and at least 3.
+export const columnWidths = (t: Table, room: number, gap: number): number[] => {
+  const natural = t.header.map((h, c) => Math.max([...h].length, ...t.rows.map(r => [...(r[c] ?? '')].length)))
+  const scale = Math.min(1, (room - gap * (natural.length - 1)) / Math.max(1, natural.reduce((a, b) => a + b, 0)))
+  return natural.map(w => Math.max(3, w * scale))
 }
 
 // ── a little syntax colouring for code cards ──
@@ -137,6 +169,10 @@ export const tokens = (line: string, lang: string): Token[] => {
   return out
 }
 
+// A token's colour in the skin, on the cards and the terminal alike.
+export const roleColor = (p: Palette, role: Token['role']): string =>
+  ({ plain: p.text, comment: p.muted, string: p.green, number: p.yellow, keyword: p.purple })[role]
+
 // ── the SVG ──
 
 export const MONO = `ui-monospace, 'SF Mono', 'JetBrains Mono', Menlo, Consolas, monospace`
@@ -146,7 +182,8 @@ const LINE = 20
 const HEAD = 38
 export const PAD = 16
 
-export const escape = (t: string): string => t.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;')
+// Text for SVG: controls out, markup characters escaped.
+export const escape = (t: string): string => clean(t).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;')
 
 // Cut to `width` px of monospace, marked where it lost text.
 export const fit = (t: string, width: number): string => {
@@ -157,8 +194,9 @@ export const fit = (t: string, width: number): string => {
 // The room a card takes, from the cells the surface reports, in a range it reads well at.
 export const cardWidth = (columns: number | undefined): number => Math.round(Math.min(1100, Math.max(480, (columns ?? 100) * 6.4)))
 
+// A run of text, in the font the card sets once on its root.
 export const text = (x: number, y: number, t: string, color: string, extra = '') =>
-  `<text x="${x}" y="${y}" font-family="${MONO}" font-size="${SIZE}" style="fill:${color}" xml:space="preserve"${extra}>${escape(t)}</text>`
+  `<text x="${x}" y="${y}" style="fill:${color}" xml:space="preserve"${extra}>${escape(t)}</text>`
 
 export type Card = { source: string; width: number; height: number; alt: string }
 
@@ -178,14 +216,14 @@ export const panel = (p: Palette, width: number, title: string, mark: [string, s
   const height = HEAD + bodyHeight
   const markW = mark ? mark[0].length * CHAR + 32 : 0
   const source =
-    `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" viewBox="0 0 ${width} ${height}">` +
+    `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" viewBox="0 0 ${width} ${height}" font-family="${MONO}" font-size="${SIZE}">` +
     text(PAD, HEAD / 2 + 4, fit(title, width - PAD * 2 - markW), p.muted) +
     (mark ? badge(width - PAD, mark[0], mark[1]) : '') +
     `<line x1="0" y1="${HEAD - 0.5}" x2="${width}" y2="${HEAD - 0.5}" stroke="${p.muted}" stroke-opacity=".3"/>` +
     `<g transform="translate(0 ${HEAD})">${body}</g>` +
     `<rect x=".5" y=".5" width="${width - 1}" height="${height - 1}" rx="10" fill="none" stroke="${p.muted}" stroke-opacity=".45"/>` +
     `</svg>`
-  return { source, width, height, alt }
+  return { source, width, height, alt: clean(alt) }
 }
 
 // A card of text rows, LINE apart.
@@ -196,61 +234,72 @@ const top = (i: number) => HEAD + 8 + i * LINE
 const baseline = (i: number) => top(i) + 14
 const band = (i: number, width: number, color: string, opacity: number) =>
   `<rect x="1" y="${top(i)}" width="${width - 2}" height="${LINE}" fill="${color}" fill-opacity="${opacity}"/>`
+const lineNo = (i: number, no: number, digits: number, p: Palette) => text(PAD, baseline(i), String(no).padStart(digits), p.muted, ' fill-opacity=".7"')
+const plural = (n: number, word: string) => `${n} ${word}${n === 1 ? '' : 's'}`
 
+// The rows a code or table card draws before it folds the rest (its Copy keeps them): with
+// the fold's row, as tall as the app draws an image (4096 px).
+const MAX_ROWS = 200
+
+// One text per line, a span per coloured token; plain tokens take the line's colour.
 export const codeSvg = (lang: string, code: string, p: Palette, width: number): Card => {
   const lines = code.replace(/\t/g, '    ').split('\n')
-  const gutter = String(lines.length).length * CHAR + 14
-  const roles: Record<Token['role'], string> = { plain: p.text, comment: p.muted, string: p.green, number: p.yellow, keyword: p.purple }
-  const rows = lines.map((l, i) => {
-    let x = PAD + gutter
-    const room = width - PAD - x
-    const spans = tokens(fit(l, room), lang).map(t => {
-      const span = text(x, baseline(i), t.text, roles[t.role], t.role === 'comment' ? ' font-style="italic"' : '')
-      x += [...t.text].length * CHAR
-      return span
-    })
-    return text(PAD, baseline(i), String(i + 1).padStart(String(lines.length).length), p.muted, ' fill-opacity=".7"') + spans.join('')
-  })
-  return frame(p, width, lang || 'code', [`${lines.length} line${lines.length === 1 ? '' : 's'}`, p.muted], rows, code)
+  const shown = lines.slice(0, MAX_ROWS)
+  const digits = String(shown.length).length
+  const gutter = digits * CHAR + 14
+  const span = (t: Token) =>
+    t.role === 'plain' ? escape(t.text) : `<tspan style="fill:${roleColor(p, t.role)}${t.role === 'comment' ? ';font-style:italic' : ''}">${escape(t.text)}</tspan>`
+  const rows = shown.map(
+    (l, i) =>
+      lineNo(i, i + 1, digits, p) +
+      `<text x="${PAD + gutter}" y="${baseline(i)}" style="fill:${p.text}" xml:space="preserve">${tokens(fit(l, width - PAD * 2 - gutter), lang).map(span).join('')}</text>`,
+  )
+  const fold = lines.length > shown.length ? [`⋯ ${plural(lines.length - shown.length, 'more line')}`] : []
+  const folded = [...rows, ...fold.map(f => text(PAD, baseline(rows.length), f, p.muted))]
+  return frame(p, width, lang || 'code', [plural(lines.length, 'line'), p.muted], folded, [...shown, ...fold].join('\n'))
 }
 
 export const tableSvg = (t: Table, p: Palette, width: number): Card => {
   const gap = 18
-  const natural = t.header.map((h, c) => Math.max([...h].length, ...t.rows.map(r => [...(r[c] ?? '')].length)) * CHAR)
-  const room = width - PAD * 2 - gap * (t.header.length - 1)
-  const scale = Math.min(1, room / Math.max(1, natural.reduce((a, b) => a + b, 0)))
-  const widths = natural.map(w => Math.max(3 * CHAR, w * scale))
+  const shown = t.rows.slice(0, MAX_ROWS - 1) // the header takes a row
+  const widths = columnWidths({ header: t.header, rows: shown }, (width - PAD * 2) / CHAR, gap / CHAR).map(w => w * CHAR)
   const xs = widths.map((_, c) => PAD + widths.slice(0, c).reduce((a, b) => a + b + gap, 0))
   const cells = (r: string[], i: number, color: string, extra = '') =>
     r.map((cell, c) => text(xs[c] ?? PAD, baseline(i), fit(cell, widths[c] ?? 0), color, extra)).join('')
+  const fold = t.rows.length > shown.length ? [`⋯ ${plural(t.rows.length - shown.length, 'more row')}`] : []
   const rows = [
     cells(t.header, 0, p.accent, ' font-weight="600"'),
-    ...t.rows.map((r, i) => (i % 2 === 0 ? band(i + 1, width, p.text, 0.05) : '') + cells(r, i + 1, p.text)),
+    ...shown.map((r, i) => (i % 2 === 0 ? band(i + 1, width, p.text, 0.05) : '') + cells(r, i + 1, p.text)),
+    ...fold.map(f => text(PAD, baseline(shown.length + 1), f, p.muted)),
   ]
-  const alt = [t.header, ...t.rows].map(r => r.join(' | ')).join('\n')
-  return frame(p, width, 'table', [`${t.rows.length} row${t.rows.length === 1 ? '' : 's'}`, p.muted], rows, alt)
+  const alt = [...[t.header, ...shown].map(r => r.join(' | ')), ...fold].join('\n')
+  return frame(p, width, 'table', [plural(t.rows.length, 'row'), p.muted], rows, alt)
 }
 
 export const diffSvg = (d: Diff, shownPath: string, p: Palette, width: number, max = 60): Card => {
-  // Each line with the number it has in the new file (or the old, for a removed line).
+  // Each line with the number it has in the new file (or the old, for a removed line); none
+  // in a hunk from 0 on both sides, which had no `@@` to count from.
   const numbered = d.hunks.flatMap((h, hi) => {
+    const hasNumbers = h.oldStart > 0 || h.newStart > 0
     let oldNo = h.oldStart
     let newNo = h.newStart
     const lines = h.lines.map(l => {
       const no = l.startsWith('-') ? oldNo++ : newNo++
       if (l.startsWith(' ')) oldNo++
-      return { no, l }
+      return { no: hasNumbers ? no : 0, l }
     })
     return hi > 0 ? [{ no: 0, l: '⋯' }, ...lines] : lines
   })
   const shown = numbered.length > max ? [...numbered.slice(0, max), { no: 0, l: `⋯ ${numbered.length - max} more lines` }] : numbered
-  const gutter = String(Math.max(...shown.map(s => s.no))).length * CHAR + 14
+  const highest = Math.max(0, ...shown.map(s => s.no))
+  const digits = String(highest).length
+  const gutter = highest > 0 ? digits * CHAR + 14 : 0
   const rows = shown.map(({ no, l }, i) => {
     const isAdd = l.startsWith('+')
     const isDel = l.startsWith('-')
     const color = isAdd ? p.green : isDel ? p.red : l.startsWith('⋯') ? p.muted : p.text
     const tint = isAdd || isDel ? band(i, width, color, 0.1) : ''
-    const num = no > 0 ? text(PAD, baseline(i), String(no).padStart(String(Math.max(...shown.map(s => s.no))).length), p.muted, ' fill-opacity=".7"') : ''
+    const num = no > 0 ? lineNo(i, no, digits, p) : ''
     return tint + num + text(PAD + gutter, baseline(i), fit(l, width - PAD * 2 - gutter), color)
   })
   const mark: [string, string] = d.isNew ? [`new · ${d.added}`, p.green] : [`+${d.added} −${d.removed}`, d.removed > d.added ? p.red : p.green]
@@ -264,7 +313,7 @@ export const terminalSvg = (s: Shell, p: Palette, width: number): Card => {
   const rows = (lines.length === 0 ? [{ text: 'no output', isErr: false }] : lines).map((l, i) =>
     'fold' in l
       ? text(PAD, baseline(i), `⋯ ${l.fold} more lines`, p.muted)
-      : text(PAD, baseline(i), fit(l.text, width - PAD * 2), lines.length === 0 ? p.muted : l.isErr ? p.red : p.text),
+      : text(PAD, baseline(i), fit(l.text.replace(/\t/g, '  '), width - PAD * 2), lines.length === 0 ? p.muted : l.isErr ? p.red : p.text),
   )
   const alt = [`$ ${s.command}`, ...lines.map(l => ('fold' in l ? `… ${l.fold} more lines` : l.text))].join('\n')
   return frame(p, width, s.command ? `$ ${s.command}` : 'shell', [s.status, STATUS(p, s.status)], rows, alt)

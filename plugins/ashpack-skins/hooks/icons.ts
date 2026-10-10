@@ -1,7 +1,7 @@
 import type { Kind } from './skins'
 
-// Small line icons the desktop app draws as images, one per kind of tool call, and the
-// turn's loader. Animation is CSS or SMIL inside the SVG, which plays in the image.
+// Small line icons the desktop app draws as images, one per kind of tool call. A running
+// call's ring turns by CSS inside the SVG, which plays in the image.
 
 // Strokes on a 24-unit grid.
 const SHAPES: Readonly<Record<Kind, string>> = {
