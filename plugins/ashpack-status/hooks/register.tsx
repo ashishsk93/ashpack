@@ -91,9 +91,6 @@ async function seenFromSettings($: EngineInterface): Promise<Seen> {
 }
 
 async function loadStatus($: EngineInterface): Promise<void> {
-  // While a turn runs on the desktop app, no write: each one redraws the band, and the app
-  // then puts its own spinner back over the skin's until the next step. turn.complete refreshes.
-  if (!terminalSeen && (await read($, activity)) !== null) return
   const [model, usage, git, cwd] = await Promise.all([$.session.model(), $.session.usage(), gitInfo($), $.session.cwd()])
   const data: StatusData = {
     model,
