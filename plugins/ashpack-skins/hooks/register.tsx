@@ -1,11 +1,11 @@
 import { atom, memberOf, read, update } from 'claude-code'
-import type { EngineInterface, Register, RenderInput, Timer } from 'claude-code'
+import type { EngineInterface, Register, RenderInput } from 'claude-code'
 
 import type { Block, Inline } from './markdown'
 import { parseBlocks } from './markdown'
 import type { Card, Table } from './cards'
 import { cardWidth, codeSvg, diffOf, diffSvg, shellOf, tableOf, tableSvg, terminalSvg } from './cards'
-import { toolIcon, wave, waveSvg } from './icons'
+import { toolIcon } from './icons'
 import type { Kind, Palette, Skin } from './skins'
 import { cardLayout, duration, isLightTheme, kindColor, kindOf, OFF, paletteOf, pick, pixelRows, pixelSvg, pixelWidth, SKINS, skinById, targetOf, themeFor, toolLabel } from './skins'
 
@@ -43,10 +43,6 @@ const hasImages = atom({ plugin: 'ashpack-skins', key: 'images' } as const, fals
 const tookMs = atom({ plugin: 'ashpack-skins', key: 'duration' } as const, -1) // per tool call: how long it ran
 const commandOf = atom({ plugin: 'ashpack-skins', key: 'command' } as const, '') // per Bash call: its command
 const sharedAccent = atom({ plugin: 'ashpack-skins', key: 'accent' } as const, '') // read by AshPack's loader
-const frame = atom({ plugin: 'ashpack-skins', key: 'frame' } as const, 0)
-const FRAME_MS = 120
-const SPINNER_CELLS = 4 // the terminal spinner's wave
-const SPINNER_PX = 25 // the desktop spinner's wave: four bars
 const EDITS = new Set(['Edit', 'Write', 'MultiEdit'])
 
 type Active = { skin: Skin; p: Palette }
@@ -74,14 +70,6 @@ async function shareAccent($: EngineInterface): Promise<void> {
   await update($, sharedAccent, () => a?.p.accent ?? '')
 }
 
-// The terminal spinner's wave moves a step per tick while a turn runs.
-let ticker: Timer | undefined
-let terminalSeen = false // a terminal has drawn: the frame has a reader
-
-function stopTicker(): void {
-  ticker?.cancel()
-  ticker = undefined
-}
 
 async function load($: EngineInterface): Promise<void> {
   const [stored, storedOn, mode] = await Promise.all([$.store.get(SKIN_KEY), $.store.get(ON_KEY), $.store.get(MODE_KEY)])
@@ -512,7 +500,6 @@ export const register: Register = on => {
 
   // Your prompt in the skin's colour, in a rounded outline sized to what you typed.
   on('ui.render', { component: 'UserMessage' }, async ($, e, next) => {
-    if (e.surface === 'terminal') terminalSeen = true
     const a = await active($)
     if (!a || !TYPED.has(e.props.origin.kind) || e.props.text.length > MAX_PROMPT || (await read($, memberOf(hasImages, e)))) {
       return next(e)
@@ -603,37 +590,13 @@ export const register: Register = on => {
     )
   })
 
-  on('turn.start', async ($, e, next) => {
-    stopTicker()
-    // Only the terminal reads `frame`; a tick on the desktop would only redraw the transcript.
-    if (terminalSeen) ticker = $.clock.every(FRAME_MS, () => void update($, frame, n => (n + 1) % 100_000))
-    return next(e)
-  })
-
-  on('turn.complete', async ($, e, next) => {
-    if (!e.agentId) stopTicker()
-    return next(e)
-  })
-
-  // The spinner: a wave in the skin's accent. The terminal keeps Claude Code's line (time,
-  // tokens), says the skin's word and puts the wave after it; the desktop draws the wave
-  // beside the step the app names.
+  // The spinner has no wave of its own (AshPack's popup keeps one). In the desktop app a live
+  // run of tool calls draws the app's own row (orange dots) whatever a mod answers, so a
+  // skinned spinner there flipped back and forth: the app keeps its own. The terminal keeps
+  // Claude Code's line and says the skin's word.
   on('ui.render', { component: 'Spinner' }, async ($, e, next) => {
-    if (e.surface === 'terminal') terminalSeen = true
-    const a = await active($)
-    if (!a) return next(e)
-    if (e.surface !== 'terminal') {
-      const { Box, Svg, Text } = $.ui.resolve(e)
-      return (
-        <Box flexDirection="row" columnGap={1} alignItems="center">
-          <Svg source={waveSvg(a.p.accent, SPINNER_PX)} alt="Working" />
-          <Text color={a.p.muted}>{e.props.message ?? e.props.word}</Text>
-        </Box>
-      )
-    }
-    const f = await read($, frame)
-    const word = e.props.message === null ? pick(a.skin.words, e.props.word) : e.props.word
-    return next({ ...e, props: { ...e.props, word, suffix: `${e.props.suffix} ${wave(f, SPINNER_CELLS)}` } })
+    const a = e.surface === 'terminal' && e.props.message === null ? await active($) : null
+    return a ? next({ ...e, props: { ...e.props, word: pick(a.skin.words, e.props.word) } }) : next(e)
   })
 
   on('ui.render', { component: 'TurnDuration' }, async ($, e, next) => {

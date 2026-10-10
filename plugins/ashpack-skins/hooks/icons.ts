@@ -26,33 +26,3 @@ export const toolIcon = (kind: Kind, color: string, isRunning: boolean): string 
   isRunning
     ? svg(16, TURN, `<g transform="translate(6 6) scale(.5)">${strokes(color, SHAPES[kind])}</g><circle class="t" cx="12" cy="12" r="10" fill="none" stroke="${color}" stroke-width="1.7" stroke-linecap="round" stroke-dasharray="16 47"/>`)
     : svg(16, '', strokes(color, SHAPES[kind]))
-
-// ── the turn's loader: a row of bars that rise and fall in turn, a wave moving right ──
-
-const LEVELS = '▁▂▃▄▅▆▇█'
-
-// The terminal's wave at `frame`: `width` cells, each a bar.
-export const wave = (frame: number, width: number): string =>
-  Array.from({ length: width }, (_, i) => LEVELS[Math.round(((Math.sin(i * 0.8 - frame * 0.45) + 1) / 2) * 7)]).join('')
-
-const BAR_PX = 4
-const BAR_GAP_PX = 3
-const WAVE_H = 12 // px
-const WAVE_S = 0.9
-
-// The desktop's wave: an SVG that animates itself (SMIL), each bar a beat behind the one before.
-export const waveSvg = (color: string, width: number): string => {
-  const bars = Math.max(3, Math.floor((width + BAR_GAP_PX) / (BAR_PX + BAR_GAP_PX)))
-  const w = bars * (BAR_PX + BAR_GAP_PX) - BAR_GAP_PX
-  const low = WAVE_H / 4
-  const rects = Array.from({ length: bars }, (_, i) => {
-    const begin = `begin="${(-i * 0.1).toFixed(1)}s"`
-    return (
-      `<rect x="${i * (BAR_PX + BAR_GAP_PX)}" width="${BAR_PX}" rx="${BAR_PX / 2}" fill="${color}">` +
-      `<animate attributeName="height" values="${low};${WAVE_H};${low}" dur="${WAVE_S}s" ${begin} repeatCount="indefinite"/>` +
-      `<animate attributeName="y" values="${(WAVE_H - low) / 2};0;${(WAVE_H - low) / 2}" dur="${WAVE_S}s" ${begin} repeatCount="indefinite"/>` +
-      `</rect>`
-    )
-  }).join('')
-  return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${w} ${WAVE_H}" width="${w}" height="${WAVE_H}">${rects}</svg>`
-}

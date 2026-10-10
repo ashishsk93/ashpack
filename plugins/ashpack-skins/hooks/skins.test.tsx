@@ -236,19 +236,20 @@ test('a reply draws in the skin\'s colors, with code and tables as cards', async
   }
 })
 
-test('the desktop draws tool rows, group rows, diff and terminal cards; the spinner is a wave', async ($, on) => {
+test('the desktop draws tool rows, group rows, diff and terminal cards; the spinner has no wave', async ($, on) => {
   mock.store(on)
   const clock = mock.clock(on, { now: 0 })
   on('config.list', () => ({ value: [{ key: 'theme', value: 'dark' }] }) as never)
   on('session.cwd', () => ({ value: '/repo' }) as never)
   let suffix = '' // what the skin hands Claude Code's spinner to draw after the word
+  let word = '' // and the word it hands it
   let compactOn = false // stands in for ashpack-status' compact switch
   on('state.get', ($, e, next) => {
     const { plugin, key } = e as { plugin: string; key: string } // another plugin's value: not in this contract
     return plugin === 'ashpack-status' && key === 'compact' ? ({ value: { value: compactOn, version: 1 } } as never) : next(e)
   })
   on('ui.render', { component: ['ToolResult', 'ToolUse', 'ToolGroup', 'Spinner'] }, ($, e) => {
-    if (e.component === 'Spinner') suffix = (e.props as { suffix: string }).suffix
+    if (e.component === 'Spinner') ({ suffix, word } = e.props as { suffix: string; word: string })
     const { Text } = $.ui.resolve(e)
     return <Text>{`engine-${e.component}`}</Text>
   })
@@ -296,17 +297,19 @@ test('the desktop draws tool rows, group rows, diff and terminal cards; the spin
   // The terminal keeps Claude Code's own diff and output.
   expect(await drawnOf(await mount('terminal', 'ToolResult', { tool_use_id: 'b1', tool: 'Bash', output: shell, isErrored: false }))).toContain('engine-ToolResult')
 
-  // The spinner: a wave in the skin's accent; the terminal puts it after Claude Code's word.
-  const spinProps = { word: 'Baking', message: 'Reading auth.ts', suffix: '…', mode: 'tool-use' }
+  // The spinner has no wave. The desktop keeps the app's own: a live run of tool calls draws
+  // the app's own row there whatever a mod answers, so a skinned spinner flipped back and
+  // forth. The terminal says the skin's word, Claude Code's suffix as it was.
+  const spinProps = { word: 'Baking', message: null, suffix: '…', mode: 'thinking' }
   // With ashpack-status' compact mode on, skins step aside: the mods beneath hide the rows.
   compactOn = true
   expect(await drawnOf(await mount('desktop', 'ToolUse', { tool_use_id: 'e1', tool: 'Edit', input: { file_path: '/repo/src/auth.ts' }, isRunning: false, isErrored: false, isInterrupted: false }))).toContain('engine-ToolUse')
   expect(await drawnOf(await mount('desktop', 'ToolGroup', { calls, isActive: false, isExpanded: false }))).toContain('engine-ToolGroup')
   compactOn = false
-  const spin = await drawnOf(await mount('desktop', 'Spinner', spinProps))
-  for (const part of ['"type":"Svg"', 'Reading auth.ts', '<animate attributeName=\\"height\\"', p.accent]) expect(spin).toContain(part)
+  expect(await drawnOf(await mount('desktop', 'Spinner', spinProps))).toContain('engine-Spinner')
   await drawnOf(await mount('terminal', 'Spinner', spinProps))
-  expect(suffix).toMatch(/^… [▁▂▃▄▅▆▇█]{4}$/)
+  expect(suffix).toBe('…')
+  expect(word).toBe(pick(SKINS.find(s => s.id === 'nord')!.words, 'Baking'))
 })
 
 test('/skin <name> switches and shares its accent, an unknown name lists the skins', async ($, on) => {
