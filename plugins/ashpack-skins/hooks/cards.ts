@@ -38,6 +38,40 @@ export const diffOf = (output: unknown): Diff | null => {
   }
 }
 
+// A ```diff fence as a diff: its hunks by their `@@` lines (one from line 1 without any),
+// the file from its `+++`/`---` lines. Null when it changes nothing.
+export const diffFence = (text: string): Diff | null => {
+  // The file: the new side's name, or the old side's for a deleted one; several files say so.
+  const names = [...text.matchAll(/^\+\+\+ (?:b\/)?(.+)$/gm)].map(m => m[1]?.trim() ?? '')
+  const old = /^--- (?:a\/)?(.+)$/m.exec(text)?.[1]?.trim() ?? ''
+  const path = names.length > 1 ? `${names.length} files` : names[0] && names[0] !== '/dev/null' ? names[0] : old === '/dev/null' ? '' : old
+  // A file's header (diff, index, ---, +++) runs until its first @@; a removed `-- x` line after one stays a line.
+  const HEADER = /^(diff |index |--- |\+\+\+ |new file|deleted file|similarity|rename |old mode|new mode)/
+  const hunks: Hunk[] = []
+  let inHeader = true
+  for (const line of text.replace(/\n+$/, '').split('\n')) {
+    const at = /^@@ -(\d+)(?:,\d+)? \+(\d+)(?:,\d+)? @@/.exec(line)
+    if (at) {
+      hunks.push({ oldStart: Number(at[1]), newStart: Number(at[2]), lines: [] })
+      inHeader = false
+    } else if (line.startsWith('diff ')) inHeader = true
+    else if (!(inHeader && HEADER.test(line))) {
+      if (hunks.length === 0) hunks.push({ oldStart: 1, newStart: 1, lines: [] })
+      // Tabs as four spaces: the card's text and the terminal both draw them as one otherwise.
+      const kept = line.replace(/\t/g, '    ')
+      hunks.at(-1)?.lines.push(/^[+\- ]/.test(kept) ? kept : ` ${kept}`)
+    }
+  }
+  const all = hunks.flatMap(h => h.lines)
+  const added = all.filter(l => l.startsWith('+')).length
+  const removed = all.filter(l => l.startsWith('-')).length
+  return added + removed > 0 ? { path, hunks, added, removed, isNew: false } : null
+}
+
+// The code after the change: the diff's kept and added lines, their marks off.
+export const newSide = (d: Diff): string =>
+  d.hunks.flatMap(h => h.lines.filter(l => !l.startsWith('-')).map(l => l.slice(1))).join('\n')
+
 export const shellOf = (output: unknown, command: string, isErrored: boolean): Shell | null => {
   const o = record(output)
   if (typeof o.stdout !== 'string' || typeof o.stderr !== 'string') return null
@@ -84,10 +118,11 @@ const KEYWORDS = new Set(
     ' ',
   ),
 )
-const HASH_COMMENTS = new Set(['py', 'python', 'sh', 'bash', 'zsh', 'shell', 'rb', 'ruby', 'yaml', 'yml', 'toml', 'r', 'pl', 'perl'])
+const HASH_COMMENTS = new Set(['py', 'python', 'sh', 'bash', 'zsh', 'fish', 'shell', 'console', 'rb', 'ruby', 'yaml', 'yml', 'toml', 'r', 'pl', 'perl', 'dockerfile', 'makefile', 'make', 'nix', 'ini', 'conf', 'powershell', 'ps1', 'pwsh'])
+const DASH_COMMENTS = new Set(['sql', 'psql', 'plsql', 'pgsql', 'plpgsql', 'postgres', 'postgresql', 'mysql', 'sqlite', 'tsql', 'mssql', 'lua', 'hs', 'haskell', 'elm', 'ada'])
 
 export const tokens = (line: string, lang: string): Token[] => {
-  const comment = HASH_COMMENTS.has(lang) ? '#.*$' : '\\/\\/.*$|--\\s.*$'
+  const comment = HASH_COMMENTS.has(lang) ? '#.*$' : DASH_COMMENTS.has(lang) ? '--.*$' : lang === 'mermaid' ? '%%.*$' : '\\/\\/.*$|\\/\\*.*?\\*\\/'
   const re = new RegExp(`(${comment})|("(?:\\\\.|[^"\\\\])*"|'(?:\\\\.|[^'\\\\])*'|\`(?:\\\\.|[^\`\\\\])*\`)|(\\b\\d[\\d_.]*\\b)|([A-Za-z_$][\\w$]*)`, 'g')
   const out: Token[] = []
   let at = 0
@@ -104,17 +139,17 @@ export const tokens = (line: string, lang: string): Token[] => {
 
 // ── the SVG ──
 
-const MONO = `ui-monospace, 'SF Mono', 'JetBrains Mono', Menlo, Consolas, monospace`
+export const MONO = `ui-monospace, 'SF Mono', 'JetBrains Mono', Menlo, Consolas, monospace`
 const SIZE = 12.5
-const CHAR = SIZE * 0.6
+export const CHAR = SIZE * 0.6
 const LINE = 20
 const HEAD = 38
-const PAD = 16
+export const PAD = 16
 
 export const escape = (t: string): string => t.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;')
 
 // Cut to `width` px of monospace, marked where it lost text.
-const fit = (t: string, width: number): string => {
+export const fit = (t: string, width: number): string => {
   const max = Math.max(1, Math.floor(width / CHAR))
   return [...t].length <= max ? t : `${[...t].slice(0, max - 1).join('')}…`
 }
@@ -122,7 +157,7 @@ const fit = (t: string, width: number): string => {
 // The room a card takes, from the cells the surface reports, in a range it reads well at.
 export const cardWidth = (columns: number | undefined): number => Math.round(Math.min(1100, Math.max(480, (columns ?? 100) * 6.4)))
 
-const text = (x: number, y: number, t: string, color: string, extra = '') =>
+export const text = (x: number, y: number, t: string, color: string, extra = '') =>
   `<text x="${x}" y="${y}" font-family="${MONO}" font-size="${SIZE}" style="fill:${color}" xml:space="preserve"${extra}>${escape(t)}</text>`
 
 export type Card = { source: string; width: number; height: number; alt: string }
@@ -136,23 +171,26 @@ const badge = (right: number, label: string, color: string) => {
   )
 }
 
-// The card: a header (a title, a badge), a hairline, then its rows. No entry animation:
-// the desktop app keeps a message's first tree and re-mounts it on every layout change.
-const frame = (p: Palette, width: number, title: string, mark: [string, string] | null, rows: string[], alt: string): Card => {
-  const height = HEAD + 8 + Math.max(1, rows.length) * LINE + 10
-  const wrap = (row: string, i: number) =>
-    `<g>${row}</g>`
+// The card: a header (a title, a badge), a hairline, then its body, `bodyHeight` tall,
+// drawn from y = 0 under the header. No entry animation: the desktop app keeps a
+// message's first tree and re-mounts it on every layout change.
+export const panel = (p: Palette, width: number, title: string, mark: [string, string] | null, body: string, bodyHeight: number, alt: string): Card => {
+  const height = HEAD + bodyHeight
   const markW = mark ? mark[0].length * CHAR + 32 : 0
   const source =
     `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" viewBox="0 0 ${width} ${height}">` +
     text(PAD, HEAD / 2 + 4, fit(title, width - PAD * 2 - markW), p.muted) +
     (mark ? badge(width - PAD, mark[0], mark[1]) : '') +
     `<line x1="0" y1="${HEAD - 0.5}" x2="${width}" y2="${HEAD - 0.5}" stroke="${p.muted}" stroke-opacity=".3"/>` +
-    rows.map(wrap).join('') +
+    `<g transform="translate(0 ${HEAD})">${body}</g>` +
     `<rect x=".5" y=".5" width="${width - 1}" height="${height - 1}" rx="10" fill="none" stroke="${p.muted}" stroke-opacity=".45"/>` +
     `</svg>`
   return { source, width, height, alt }
 }
+
+// A card of text rows, LINE apart.
+const frame = (p: Palette, width: number, title: string, mark: [string, string] | null, rows: string[], alt: string): Card =>
+  panel(p, width, title, mark, `<g transform="translate(0 ${-HEAD})">${rows.join('')}</g>`, 8 + Math.max(1, rows.length) * LINE + 10, alt)
 
 const top = (i: number) => HEAD + 8 + i * LINE
 const baseline = (i: number) => top(i) + 14
@@ -160,7 +198,7 @@ const band = (i: number, width: number, color: string, opacity: number) =>
   `<rect x="1" y="${top(i)}" width="${width - 2}" height="${LINE}" fill="${color}" fill-opacity="${opacity}"/>`
 
 export const codeSvg = (lang: string, code: string, p: Palette, width: number): Card => {
-  const lines = code.split('\n')
+  const lines = code.replace(/\t/g, '    ').split('\n')
   const gutter = String(lines.length).length * CHAR + 14
   const roles: Record<Token['role'], string> = { plain: p.text, comment: p.muted, string: p.green, number: p.yellow, keyword: p.purple }
   const rows = lines.map((l, i) => {

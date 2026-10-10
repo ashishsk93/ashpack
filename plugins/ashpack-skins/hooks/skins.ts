@@ -120,6 +120,39 @@ export const SKINS: Skin[] = [
     words: ['Sizzling', 'Hacking', 'Zapping', 'Buzzing', 'Sparking'],
     done: ['Zapped', 'Hacked', 'Sparked'],
   },
+  {
+    id: 'ayu',
+    label: 'Ayu',
+    dark: { bg: '#0b0e14', text: '#bfbdb6', muted: '#6c7380', accent: '#e6b450', blue: '#59c2ff', green: '#aad94c', red: '#f07178', yellow: '#ffb454', purple: '#d2a6ff', cyan: '#95e6cb', pink: '#f29668' },
+    light: { bg: '#fcfcfc', text: '#5c6166', muted: '#8a9199', accent: '#e07b00', blue: '#2e8ad6', green: '#6c9100', red: '#e65050', yellow: '#b8860b', purple: '#a37acc', cyan: '#2fa58a', pink: '#e0794d' },
+    words: ['Glinting', 'Shimmering', 'Mirroring', 'Gleaming', 'Polishing'],
+    done: ['Gleamed', 'Mirrored', 'Polished'],
+  },
+  {
+    id: 'night-owl',
+    label: 'Night Owl',
+    dark: { bg: '#011627', text: '#d6deeb', muted: '#637777', accent: '#c792ea', blue: '#82aaff', green: '#addb67', red: '#ef5350', yellow: '#ecc48d', purple: '#c792ea', cyan: '#7fdbca', pink: '#f78c6c' },
+    light: { bg: '#fbfbfb', text: '#403f53', muted: '#7a8181', accent: '#994cc3', blue: '#4876d6', green: '#08916a', red: '#de3d3b', yellow: '#b5810a', purple: '#994cc3', cyan: '#0c969b', pink: '#bc5454' },
+    words: ['Hooting', 'Prowling', 'Gliding', 'Watching', 'Roosting'],
+    done: ['Hooted', 'Swooped', 'Roosted'],
+  },
+  {
+    id: 'poimandres',
+    label: 'Poimandres',
+    dark: { bg: '#1b1e28', text: '#e4f0fb', muted: '#767c9d', accent: '#5de4c7', blue: '#89ddff', green: '#5de4c7', red: '#d0679d', yellow: '#fffac2', purple: '#91b4d5', cyan: '#add7ff', pink: '#fcc5e9' },
+    light: { bg: '#f4f5f9', text: '#2f3347', muted: '#767c9d', accent: '#1b8f78', blue: '#2a7fb8', green: '#1b8f78', red: '#c2477d', yellow: '#8f7d10', purple: '#5f6fb0', cyan: '#2a90a8', pink: '#b04f99' },
+    words: ['Dreaming', 'Drifting', 'Musing', 'Hovering', 'Pondering'],
+    done: ['Dreamt', 'Mused', 'Pondered'],
+  },
+  {
+    // No hues: text in greys, the accent white (or black). Diffs read by their + and −.
+    id: 'mono',
+    label: 'Mono',
+    dark: { bg: '#121212', text: '#e8e8e8', muted: '#8a8a8a', accent: '#ffffff', blue: '#c8c8c8', green: '#d6d6d6', red: '#f0f0f0', yellow: '#bdbdbd', purple: '#cfcfcf', cyan: '#b0b0b0', pink: '#dcdcdc' },
+    light: { bg: '#fafafa', text: '#1a1a1a', muted: '#7a7a7a', accent: '#000000', blue: '#3a3a3a', green: '#2a2a2a', red: '#111111', yellow: '#4a4a4a', purple: '#333333', cyan: '#555555', pink: '#444444' },
+    words: ['Thinking', 'Working', 'Writing', 'Reading', 'Weighing'],
+    done: ['Done', 'Finished', 'Worked'],
+  },
 ]
 
 export const OFF = 'off'

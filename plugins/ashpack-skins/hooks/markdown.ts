@@ -6,11 +6,17 @@ export type Inline = { text: string; kind: 'plain' | 'bold' | 'italic' | 'code' 
 export type Block =
   | { kind: 'heading'; level: number; spans: Inline[] }
   | { kind: 'para'; spans: Inline[] }
-  | { kind: 'item'; marker: string; depth: number; spans: Inline[] }
+  | { kind: 'item'; marker: string; depth: number; spans: Inline[]; check?: boolean } // check: a task item, done or not
   | { kind: 'quote'; spans: Inline[] }
-  | { kind: 'code'; lang: string; code: string }
+  | { kind: 'alert'; type: AlertType; lines: Inline[][] }
+  | { kind: 'code'; lang: string; code: string; isClosed: boolean }
   | { kind: 'rule' }
   | { kind: 'markdown'; text: string }
+
+export type AlertType = 'note' | 'tip' | 'important' | 'warning' | 'caution'
+
+const ALERT = /^\[!(NOTE|TIP|IMPORTANT|WARNING|CAUTION)\]\s*(.*)$/i
+const TASK = /^\[([ xX])\]\s+(.*)$/
 
 const FENCE = /^\s*(```|~~~)\s*([\w+#.-]*)\s*$/
 const FENCE_END = /^\s*(```|~~~)\s*$/
@@ -56,7 +62,7 @@ export const parseBlocks = (md: string): Block[] => {
       flush()
       const close = lines.findIndex((l, j) => j > i && FENCE_END.test(l))
       const end = close === -1 ? lines.length : close
-      blocks.push({ kind: 'code', lang: (fence[2] ?? '').toLowerCase(), code: lines.slice(i + 1, end).join('\n') })
+      blocks.push({ kind: 'code', lang: (fence[2] ?? '').toLowerCase(), code: lines.slice(i + 1, end).join('\n'), isClosed: close !== -1 })
       i = end
       continue
     }
@@ -81,10 +87,26 @@ export const parseBlocks = (md: string): Block[] => {
     } else if (item) {
       flush()
       const marker = item[2] ?? '-'
-      blocks.push({ kind: 'item', marker: /\d/.test(marker) ? marker : '•', depth: Math.floor((item[1]?.length ?? 0) / 2), spans: parseInline(item[3] ?? '') })
+      const task = TASK.exec(item[3] ?? '')
+      const depth = Math.floor((item[1]?.length ?? 0) / 2)
+      blocks.push({
+        kind: 'item',
+        marker: /\d/.test(marker) ? marker : '•',
+        depth,
+        spans: parseInline(task ? (task[2] ?? '') : (item[3] ?? '')),
+        ...(task ? { check: task[1] !== ' ' } : {}),
+      })
     } else if (quote) {
       flush()
-      blocks.push({ kind: 'quote', spans: parseInline(quote[1] ?? '') })
+      // `> [!NOTE]` opens an alert that takes the quote lines after it.
+      const alert = ALERT.exec(quote[1] ?? '')
+      if (alert) {
+        const rest = lines.slice(i + 1).findIndex(l => !QUOTE.test(l))
+        const end = rest === -1 ? lines.length : i + 1 + rest
+        const body = [alert[2] ?? '', ...lines.slice(i + 1, end).map(l => QUOTE.exec(l)?.[1] ?? '')].filter(l => l.trim() !== '')
+        blocks.push({ kind: 'alert', type: (alert[1] ?? 'note').toLowerCase() as AlertType, lines: body.map(parseInline) })
+        i = end - 1
+      } else blocks.push({ kind: 'quote', spans: parseInline(quote[1] ?? '') })
     } else para.push(line.trim())
   }
   flush()

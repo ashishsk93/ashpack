@@ -1,10 +1,16 @@
 import { atom, memberOf, read, update } from 'claude-code'
 import type { EngineInterface, Register, RenderInput } from 'claude-code'
 
+import type { SharedPalette } from '../types'
 import type { Block, Inline } from './markdown'
 import { parseBlocks } from './markdown'
+import { ALERT_TITLE, alertColor, roleColor, SHELLS, taskRun } from './reply'
 import type { Card, Table } from './cards'
-import { cardWidth, codeSvg, diffOf, diffSvg, shellOf, tableOf, tableSvg, terminalSvg } from './cards'
+import { cardWidth, codeSvg, diffFence, diffOf, diffSvg, newSide, shellOf, tableOf, tableSvg, terminalSvg, tokens } from './cards'
+import { chartRows, chartTitle } from './chart-cells'
+import { chartSvg } from './charts'
+import type { Chart } from './mermaid'
+import { parseChart } from './mermaid'
 import { toolIcon } from './icons'
 import type { Kind, Palette, Skin } from './skins'
 import { cardLayout, duration, isLightTheme, kindColor, kindOf, OFF, paletteOf, pick, pixelRows, pixelSvg, pixelWidth, SKINS, skinById, targetOf, themeFor, toolLabel } from './skins'
@@ -13,7 +19,7 @@ import { cardLayout, duration, isLightTheme, kindColor, kindOf, OFF, paletteOf, 
 // footer in a skin's colors. On the desktop app it also draws tool rows and group rows
 // (a line icon, the target, lines changed, time taken), edits as diff cards, shell
 // output in a terminal card, code and tables as cards, and
-// a moving mark for what the turn is doing. The terminal keeps plain rows and Claude
+// a moving mark for what the turn is doing. On both, a ```mermaid fence draws as a chart. The terminal keeps plain rows and Claude
 // Code's own diffs and output. The picker is a page of the AshPack drawer (`/skin` opens
 // it there), or a pane of its own without AshPack. Dark or light picks the palette and
 // Claude Code's theme. What the model reads and the stored conversation are untouched.
@@ -24,11 +30,14 @@ const ASHPACK = 'ashpack@ashpack'
 const SKIN_KEY = 'skin' // $.store keys: the picked skin, whether skins are on, dark or light
 const ON_KEY = 'on'
 const MODE_KEY = 'mode'
+const CHARTS_KEY = 'charts'
 const DEFAULT_SKIN = SKINS[0]?.id ?? ''
 const HOTKEYS = '123456789abcdefg'
 const CARD_GAP = 2
 const MAX_PROMPT = 4000 // a longer paste keeps Claude Code's folding
 const MAX_REPLY = 20_000 // a longer reply keeps Claude Code's drawing
+const MAX_CHART_SVG = 120_000 // characters; the engine takes an Svg source up to 131,072
+const MAX_CHART_PX = 4000 // a taller chart card is a code card instead
 const BANNER = 'ASHPACK SKINS'
 const SHORT_BANNER = 'SKINS'
 const BANNER_PX = 6 // the desktop banner's pixel, in CSS pixels
@@ -43,6 +52,17 @@ const hasImages = atom({ plugin: 'ashpack-skins', key: 'images' } as const, fals
 const tookMs = atom({ plugin: 'ashpack-skins', key: 'duration' } as const, -1) // per tool call: how long it ran
 const commandOf = atom({ plugin: 'ashpack-skins', key: 'command' } as const, '') // per Bash call: its command
 const sharedAccent = atom({ plugin: 'ashpack-skins', key: 'accent' } as const, '') // read by AshPack's loader
+const sharedPalette = atom({ plugin: 'ashpack-skins', key: 'palette' } as const, null as SharedPalette | null) // read by ashpack-status
+const chartsOn = atom({ plugin: 'ashpack-skins', key: 'charts' } as const, true)
+
+// What Claude is told while charts draw: model-only, added after the cache boundary.
+const CHARTS_NOTE = {
+  id: 'ashpack-skins:charts',
+  scope: 'session',
+  text:
+    'Charts: this session draws ```mermaid fenced blocks as pictures. It draws flowchart (or graph) TD and LR, sequenceDiagram, stateDiagram-v2, classDiagram, erDiagram, mindmap, pie, xychart-beta with bar and line series, timeline, gantt with YYYY-MM-DD dates, and quadrantChart. ' +
+    'Use one when a flow, an exchange between parts, a share of a whole or a trend reads better as a picture than as prose or a table; otherwise write as usual. Other Mermaid diagram types show as plain code.',
+} as const
 const EDITS = new Set(['Edit', 'Write', 'MultiEdit'])
 
 type Active = { skin: Skin; p: Palette }
@@ -64,15 +84,19 @@ async function active($: EngineInterface): Promise<Active | null> {
   return skin ? { skin, p: paletteOf(skin, light) } : null
 }
 
-// Other mods (AshPack's loader) wear the active skin's accent.
+// Other mods wear the active skin: the host its accent, the status chips and popup its palette.
 async function shareAccent($: EngineInterface): Promise<void> {
   const a = await active($)
+  const palette: SharedPalette | null = a ? { ok: a.p.green, warn: a.p.yellow, hot: a.p.red, accent: a.p.accent, blue: a.p.blue, muted: a.p.muted } : null
   await update($, sharedAccent, () => a?.p.accent ?? '')
+  // Only a change is written: each write redraws every reader.
+  if (JSON.stringify(await read($, sharedPalette)) !== JSON.stringify(palette)) await update($, sharedPalette, () => palette)
 }
 
 
 async function load($: EngineInterface): Promise<void> {
-  const [stored, storedOn, mode] = await Promise.all([$.store.get(SKIN_KEY), $.store.get(ON_KEY), $.store.get(MODE_KEY)])
+  const [stored, storedOn, mode, storedCharts] = await Promise.all([$.store.get(SKIN_KEY), $.store.get(ON_KEY), $.store.get(MODE_KEY), $.store.get(CHARTS_KEY)])
+  await update($, chartsOn, () => storedCharts !== false)
   // 0.1.0 stored 'off' as the skin itself.
   await update($, chosen, () => (typeof stored === 'string' && skinById(stored) ? stored : DEFAULT_SKIN))
   await update($, isOn, () => (typeof storedOn === 'boolean' ? storedOn : stored !== OFF))
@@ -107,6 +131,11 @@ async function setOn($: EngineInterface, value: boolean): Promise<void> {
   await update($, isOn, () => value)
   await $.store.set(ON_KEY, value)
   await shareAccent($)
+}
+
+async function setCharts($: EngineInterface, value: boolean): Promise<void> {
+  await update($, chartsOn, () => value)
+  await $.store.set(CHARTS_KEY, value)
 }
 
 // Picking a skin turns skins on.
@@ -211,9 +240,9 @@ function banner($: EngineInterface, e: RenderInput<'Pane'>, p: Palette, columns:
   )
 }
 
-// The picker: the banner, the switches (on/off, dark/light), then a card per skin, a few to a row.
+// The picker: the banner, the switches (on/off, dark/light, charts), then a card per skin, a few to a row.
 async function skinsPage($: EngineInterface, e: RenderInput<'Pane'>, columns: number) {
-  const [id, skinsOn, light] = await Promise.all([read($, chosen), read($, isOn), read($, isLight)])
+  const [id, skinsOn, light, charts] = await Promise.all([read($, chosen), read($, isOn), read($, isLight), read($, chartsOn)])
   const { Box, Button, Text } = $.ui.resolve(e)
   const { perRow, width } = cardLayout(columns, CARD_GAP)
   const rows = Array.from({ length: Math.ceil(SKINS.length / perRow) }, (_, r) => SKINS.slice(r * perRow, (r + 1) * perRow))
@@ -224,6 +253,7 @@ async function skinsPage($: EngineInterface, e: RenderInput<'Pane'>, columns: nu
       <Box columnGap={3}>
         <Button key="skin-toggle" plain hotkey="0" label={skinsOn ? 'Skins on' : 'Skins off'} onPress={() => setOn($, !skinsOn)} />
         <Button key="skin-mode" plain hotkey="m" label={light ? 'Light' : 'Dark'} onPress={() => setLight($, !light)} />
+        <Button key="skin-charts" plain label={charts ? 'Charts on' : 'Charts off'} onPress={() => setCharts($, !charts)} />
         <Text dimColor>{skinsOn ? picked?.label : "Claude Code's own"}</Text>
       </Box>
       {rows.map((row, r) => (
@@ -250,19 +280,98 @@ function copyText($: EngineInterface, e: DrawInput, text: string): void {
   void $.ui.copy({ text, surface: e.surface }).then(r => $.ui.toast(r.isCopied ? 'Copied' : 'Could not copy here'))
 }
 
+type Extra = { label: string; text: string } // a second copy under a card, such as a diff's new side
+
 // A card image, and a Copy under it (an image's text cannot be selected).
-function cardTree($: EngineInterface, e: DrawInput, c: Card, copy: string, key: string) {
+function cardTree($: EngineInterface, e: DrawInput, c: Card, copy: string, key: string, extra?: Extra) {
   if (e.surface === 'terminal') return null
   const { Box, Button, Svg } = $.ui.resolve(e)
   return (
     <Box key={`card-${key}`} flexDirection="column" marginY={1} alignSelf="flex-start">
       {/* Keyed, so a redraw of the transcript keeps the same image instead of rebuilding it. */}
       <Svg key={`svg-${key}`} source={c.source} alt={c.alt} width={c.width} height={c.height} />
-      <Box justifyContent="flex-end">
+      <Box justifyContent="flex-end" columnGap={2}>
+        {extra ? <Button key={`copy-extra-${key}`} plain dimColor label={extra.label} onPress={() => copyText($, e, extra.text)} /> : null}
         <Button key={`copy-${key}`} plain dimColor label="Copy" onPress={() => copyText($, e, copy)} />
       </Box>
     </Box>
   )
+}
+
+// Code on the terminal in the skin's colours: the language, then the lines, then the copies.
+// No frame and no line numbers, so a mouse selection takes only the code.
+function codeLines($: EngineInterface, e: RenderInput<'AssistantMessage'>, p: Palette, lang: string, code: string, key: string, extra?: Extra) {
+  const { Box, Button, Text } = $.ui.resolve(e)
+  const isDiff = lang === 'diff' || lang === 'patch'
+  const lineColor = (line: string) =>
+    /^(\+\+\+|---) /.test(line) ? p.muted : line.startsWith('+') ? p.green : line.startsWith('-') ? p.red : line.startsWith('@@') ? p.cyan : p.text
+  return (
+    <Box flexDirection="column">
+      {lang ? <Text color={p.muted}>{lang}</Text> : null}
+      {code.replace(/\t/g, '    ').split('\n').map((line, i) => (
+        <Text key={`${key}-line-${i}`}>
+          {line === ''
+            ? ' '
+            : isDiff
+              ? <Text color={lineColor(line)}>{line}</Text>
+              : tokens(line, lang).map((t, j) => (
+                  <Text key={`${key}-tok-${i}-${j}`} color={roleColor(p, t.role)} italic={t.role === 'comment'}>
+                    {t.text}
+                  </Text>
+                ))}
+        </Text>
+      ))}
+      <Box justifyContent="flex-end" columnGap={2}>
+        {extra ? <Button key={`copy-extra-${key}`} plain dimColor label={extra.label} onPress={() => copyText($, e, extra.text)} /> : null}
+        <Button key={`copy-${key}`} plain dimColor label="Copy" onPress={() => copyText($, e, code)} />
+      </Box>
+    </Box>
+  )
+}
+
+// A chart on the terminal: an outline, its name in the accent, then its rows of cells; a Copy
+// under it takes the Mermaid source.
+function chartBox($: EngineInterface, e: RenderInput<'AssistantMessage'>, p: Palette, chart: Chart, source: string, key: string) {
+  const { Box, Button, Text } = $.ui.resolve(e)
+  const room = Math.max(20, (e.viewport?.columns ?? 100) - 8)
+  return (
+    <Box flexDirection="column" alignSelf="flex-start">
+      <Box flexDirection="column" borderStyle="round" borderColor={p.muted} paddingX={1}>
+        <Text color={p.accent} bold>
+          {chartTitle(chart)}
+        </Text>
+        {chartRows(chart, p, room).map((row, i) => (
+          <Text key={`${key}-row-${i}`} wrap="truncate-end">
+            {row.length === 0
+              ? ' '
+              : row.map((r, j) => (
+                  <Text key={`${key}-run-${i}-${j}`} color={r.color} bold={r.bold}>
+                    {r.text}
+                  </Text>
+                ))}
+          </Text>
+        ))}
+      </Box>
+      <Box justifyContent="flex-end">
+        <Button key={`copy-${key}`} plain dimColor label="Copy" onPress={() => copyText($, e, source)} />
+      </Box>
+    </Box>
+  )
+}
+
+// A ```mermaid fence as a chart: a card on the desktop, cells on the terminal. Null, so the
+// fence stays code, when it is no chart this draws, too big for a card, or fails to draw.
+function chartTree($: EngineInterface, e: RenderInput<'AssistantMessage'>, p: Palette, code: string, width: number, key: string) {
+  try {
+    const chart = parseChart(code)
+    if (!chart) return null
+    if (e.surface === 'terminal') return chartBox($, e, p, chart, code, key)
+    const card = chartSvg(chart, p, width)
+    return card.source.length <= MAX_CHART_SVG && card.height <= MAX_CHART_PX ? cardTree($, e, card, code, key) : null
+  } catch (err) {
+    $.ui.log(`ashpack-skins: chart: ${String(err)}`, { to: 'debug' })
+    return null
+  }
 }
 
 // A table on the terminal: an outline, the column names in the accent, the cells lined up.
@@ -351,11 +460,12 @@ function groupRowTree($: EngineInterface, e: RenderInput<'ToolGroup'>, p: Palett
   )
 }
 
-// A reply's blocks in the skin's colors; code and tables as cards.
-async function replyBlocks($: EngineInterface, e: RenderInput<'AssistantMessage'>, a: Active, blocks: readonly Block[]) {
+// A reply's blocks in the skin's colors; code and tables as cards, a closed ```mermaid fence
+// it can read as a chart (while charts are on).
+async function replyBlocks($: EngineInterface, e: RenderInput<'AssistantMessage'>, a: Active, blocks: readonly Block[], charts: boolean) {
   const { p } = a
   const width = cardWidth(e.viewport?.columns)
-  const { Box, Code, Link, Markdown, Text, Button } = $.ui.resolve(e)
+  const { Box, Link, Markdown, Text } = $.ui.resolve(e)
   // A Link needs a URL; a relative path ([README.md](README.md)) stays text, underlined.
   const spans = (list: readonly Inline[], key: string, color: string) =>
     list.map((s, i) =>
@@ -381,15 +491,42 @@ async function replyBlocks($: EngineInterface, e: RenderInput<'AssistantMessage'
         )
       case 'para':
         return <Text color={p.text}>{spans(b.spans, k, p.text)}</Text>
-      case 'item':
-        return (
+      case 'item': {
+        // A task item: ✓ done, ○ still to do; the first of a list says how many are done.
+        const isTask = b.check !== undefined
+        const run = isTask ? taskRun(blocks, i) : null
+        const row = (
           <Box paddingLeft={b.depth * 2}>
-            <Text color={p.accent}>{b.marker} </Text>
+            <Text color={isTask ? (b.check ? p.green : p.muted) : p.accent}>{isTask ? (b.check ? '✓' : '○') : b.marker} </Text>
             <Box flexShrink={1}>
-              <Text color={p.text}>{spans(b.spans, k, p.text)}</Text>
+              <Text color={b.check ? p.muted : p.text}>{spans(b.spans, k, b.check ? p.muted : p.text)}</Text>
             </Box>
           </Box>
         )
+        return run && run.total > 1 ? (
+          <Box flexDirection="column">
+            <Text color={p.muted}>{`${run.done} of ${run.total} done`}</Text>
+            {row}
+          </Box>
+        ) : (
+          row
+        )
+      }
+      case 'alert': {
+        const color = alertColor(p, b.type)
+        return (
+          <Box flexDirection="column" borderStyle="round" borderColor={color} paddingX={1} flexGrow={1}>
+            <Text bold color={color}>
+              {ALERT_TITLE[b.type]}
+            </Text>
+            {b.lines.map((line, j) => (
+              <Text key={`${k}-alert-${j}`} color={p.text}>
+                {spans(line, `${k}-alert-${j}`, p.text)}
+              </Text>
+            ))}
+          </Box>
+        )
+      }
       case 'quote':
         return (
           <Box paddingLeft={2}>
@@ -398,17 +535,20 @@ async function replyBlocks($: EngineInterface, e: RenderInput<'AssistantMessage'
             </Text>
           </Box>
         )
-      case 'code':
-        // The desktop: a code card. The terminal: Claude Code's highlighting, and a Copy under it.
-        if (e.surface !== 'terminal') return cardTree($, e, codeSvg(b.lang, b.code, p, width), b.code, k)
-        return (
-          <Box flexDirection="column">
-            <Code source={b.code} {...(b.lang ? { language: b.lang } : {})} />
-            <Box justifyContent="flex-end">
-              <Button key={`copy-${k}`} plain dimColor label="Copy" onPress={() => copyText($, e, b.code)} />
-            </Box>
-          </Box>
-        )
+      case 'code': {
+        const chart = charts && b.lang === 'mermaid' && b.isClosed ? chartTree($, e, p, b.code, width, k) : null
+        if (chart) return chart
+        // A diff fence: the diff card on the desktop, its lines in green and red on the
+        // terminal; both with a second copy of the code after the change.
+        const diff = (b.lang === 'diff' || b.lang === 'patch') && b.isClosed ? diffFence(b.code) : null
+        const extra = diff ? { label: 'Copy new', text: newSide(diff) } : undefined
+        if (diff && e.surface !== 'terminal') return cardTree($, e, diffSvg(diff, diff.path || 'diff', p, width), b.code, k, extra)
+        // The desktop keeps its own block for a shell fence (its Run button), else a code card.
+        if (e.surface !== 'terminal') {
+          return SHELLS.has(b.lang) ? <Markdown text={`\`\`\`${b.lang}\n${b.code}\n\`\`\``} /> : cardTree($, e, codeSvg(b.lang, b.code, p, width), b.code, k)
+        }
+        return codeLines($, e, p, b.lang, b.code, k, extra)
+      }
       case 'rule':
         return <Text color={p.muted}>{'─'.repeat(24)}</Text>
       case 'markdown': {
@@ -432,8 +572,8 @@ export const register: Register = on => {
   on('session.start', async ($, e, next) => {
     await $.command.register({
       name: 'skin',
-      description: 'Pick a skin in the AshPack drawer, or /skin <name | on | off | dark | light>',
-      argumentHint: `[${[...SKINS.map(s => s.id), 'on', OFF, 'dark', 'light'].join(' | ')}]`,
+      description: 'Pick a skin in the AshPack drawer, or /skin <name | on | off | dark | light | charts on | charts off>',
+      argumentHint: `[${[...SKINS.map(s => s.id), 'on', OFF, 'dark', 'light', 'charts on', 'charts off'].join(' | ')}]`,
       immediate: true,
     })
     await load($)
@@ -444,6 +584,13 @@ export const register: Register = on => {
   on('classic.SessionStart', { source: ['clear', 'resume', 'fork'] }, async ($, e, next) => {
     await load($)
     return next(e)
+  }).catch(($, e, next) => next(e))
+
+  // While a skin draws charts, Claude hears that ```mermaid fences draw (never headless, with nothing to draw on).
+  on('prompt.compose', async ($, e, next) => {
+    const composed = await next(e)
+    if (e.surfaces.length === 0 || !(await read($, chartsOn)) || !(await active($))) return composed
+    return { sections: [...composed.sections.filter(s => s.id !== CHARTS_NOTE.id), CHARTS_NOTE] }
   }).catch(($, e, next) => next(e))
 
   on('config.set', async ($, e, next) => {
@@ -461,6 +608,12 @@ export const register: Register = on => {
     if (arg === 'dark' || arg === 'light') {
       await setLight($, arg === 'light')
       return { text: `Skins: ${arg}.` }
+    }
+    const charts = /^charts(?:\s+(on|off))?$/.exec(arg)
+    if (charts) {
+      const value = charts[1] ? charts[1] === 'on' : !(await read($, chartsOn))
+      await setCharts($, value)
+      return { text: value ? 'Charts on: ```mermaid fences draw as charts.' : 'Charts off: ```mermaid fences stay code.' }
     }
     if (arg === 'on' || arg === OFF) {
       await setOn($, arg === 'on')
@@ -582,10 +735,10 @@ export const register: Register = on => {
   on('ui.render', { component: 'AssistantMessage' }, async ($, e, next) => {
     const a = await active($)
     if (!a || e.props.isSummary || e.props.text.length > MAX_REPLY) return next(e)
-    const { Box, Text } = $.ui.resolve(e)
+    const { Box } = $.ui.resolve(e)
     return (
       <Box flexDirection="column" flexGrow={1} flexShrink={1}>
-        {await replyBlocks($, e, a, parseBlocks(e.props.text))}
+        {await replyBlocks($, e, a, parseBlocks(e.props.text), await read($, chartsOn))}
       </Box>
     )
   })

@@ -25,8 +25,8 @@ A mod joins with a single keyed Box; see [ADOPTING.md](ADOPTING.md). No import, 
 | Mod | What it does | Command |
 | --- | --- | --- |
 | **ashpack** | The host: the drawer, the footer button `◆ AshPack ▸`, the strip | `/ashpack [page]` |
-| **ashpack-status** | Status chips (model, branch, context, usage) and compact mode with a working popup | `/ashstatus [compact\|chips]` |
-| **ashpack-skins** | Twelve skins for prompts, replies, tool rows, cards and the spinner, dark or light | `/skin [name\|on\|off\|dark\|light]` |
+| **ashpack-status** | Status chips (model, branch, context, usage, and repo chips you can turn on) and compact mode with a working popup | `/ashstatus [compact\|chips]` |
+| **ashpack-skins** | Sixteen skins for prompts, replies, tool rows, cards, charts and the spinner, dark or light | `/skin [name\|on\|off\|dark\|light\|charts on\|charts off]` |
 
 Each works alone; together they share the drawer and the strip. [Baton](https://github.com/ashishsk93/baton-mods) adopts the drawer too.
 
@@ -54,13 +54,13 @@ The drawer (`◆ AshPack ▸` in the footer, or `/ashpack`), with **Home** and a
 
 <p align="center"><img src="docs/ashpack-status.svg" alt="The status chips, compact mode's working popup, and the Status page" width="880"></p>
 
-One row of chips: model, branch, context and usage, with segment bars that go green, amber, red. Compact mode folds the tool rows away and shows a popup with the work in progress, a wave loader beside the running step. [Read more.](plugins/ashpack-status/README.md)
+One row of chips: model, branch, context and usage, with segment bars that go green, amber, red. Four repo chips start off: the working tree, lines changed, the last commit, and the pull request with its checks. Compact mode folds the tool rows away and shows a popup with the work in progress, a wave loader beside the running step. [Read more.](plugins/ashpack-status/README.md)
 
-## ashpack-skins · twelve skins
+## ashpack-skins · sixteen skins
 
 <p align="center"><img src="docs/ashpack-skins.svg" alt="The same turn in several skins, then code and table cards" width="880"></p>
 
-Catppuccin, Dracula, Nord, Gruvbox, Tokyo Night, Rosé Pine, Solarized, One, Everforest, GitHub, Kanagawa and Monokai, dark or light. Text colors only. In the desktop app, tool calls become rows with icons, edits diff cards, shell output terminal cards, and code and tables cards with a Copy button. [Read more.](plugins/ashpack-skins/README.md)
+Catppuccin, Dracula, Nord, Gruvbox, Tokyo Night, Rosé Pine, Solarized, One, Everforest, GitHub, Kanagawa, Monokai, Ayu, Night Owl, Poimandres and Mono, dark or light. The status chips and the working popup draw in the skin's colours too. Text colors only. In the desktop app, tool calls become rows with icons, edits diff cards, shell output terminal cards, and code and tables cards with a Copy button. ` ```mermaid ` fences draw as charts on both surfaces: flowcharts, sequence, state, class and ER diagrams, mind maps, pies, bar and line charts, timelines, Gantt and quadrant charts. Diff fences, alerts and task lists draw too. [Read more.](plugins/ashpack-skins/README.md)
 
 ## Give your mod a page and a chip
 
