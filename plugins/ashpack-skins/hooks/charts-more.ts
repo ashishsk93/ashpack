@@ -1,18 +1,15 @@
 import type { Card } from './cards'
 import { CHAR, PAD, panel, text } from './cards'
-import { fitted, hues, small, SMALL_CHAR, wrapWords } from './chart-kit'
+import { cells, clip, dayLabel, fitted, ganttColor, hues, small, SMALL_CHAR, wrapWords } from './chart-kit'
 import type { Gantt, Quadrant, Timeline } from './mermaid-more'
-import { dayLabel } from './mermaid-more'
 import type { Palette } from './skins'
 
 // Cards for the timeline, Gantt and quadrant charts, like the others: an outline, a
 // header, the drawing under it, in the skin's colours.
 
-const clip = (t: string, chars: number): string => ([...t].length <= chars ? t : `${[...t].slice(0, Math.max(1, chars - 1)).join('')}…`)
-
 // ── timeline: a line across, a dot per period, its events under it ──
 
-export const timelineSvg = (c: Timeline, p: Palette, width: number, alt: string): Card => {
+export const timelineSvg = (c: Timeline, p: Palette, width: number, alt: string): Card | null => {
   const colors = hues(p)
   const col = 150
   const chars = Math.floor((col - 16) / SMALL_CHAR)
@@ -21,7 +18,7 @@ export const timelineSvg = (c: Timeline, p: Palette, width: number, alt: string)
   const top = hasSections ? 26 : 8
   const lineY = top + 34
   const w = PAD * 2 + c.periods.length * col
-  const events = c.periods.map(x => x.events.flatMap(ev => wrapWords(ev, chars).map((l, i) => (i === 0 ? `• ${l}` : `  ${l}`))))
+  const events = c.periods.map(x => x.events.flatMap(ev => wrapWords(ev, chars - 2).map((l, i) => (i === 0 ? `• ${l}` : `  ${l}`))))
   const h = lineY + 22 + Math.max(1, ...events.map(e => e.length)) * 15 + 8
   const drawn = c.periods.map((x, i) => {
     const cx = PAD + i * col + col / 2
@@ -35,8 +32,8 @@ export const timelineSvg = (c: Timeline, p: Palette, width: number, alt: string)
     )
   })
   const axis = `<line x1="${PAD}" y1="${lineY}" x2="${w - PAD}" y2="${lineY}" stroke="${p.muted}" stroke-opacity=".6"/>`
-  const { body, height } = fitted(axis + drawn.join(''), w, h, width)
-  return panel(p, width, c.title || 'timeline', [`${c.periods.length} periods`, p.muted], body, height, alt)
+  const fit = fitted(axis + drawn.join(''), w, h, width)
+  return fit && panel(p, width, c.title || 'timeline', [`${c.periods.length} periods`, p.muted], fit.body, fit.height, alt)
 }
 
 // ── Gantt: a row per task, its bar on a calendar ──
@@ -44,16 +41,13 @@ export const timelineSvg = (c: Timeline, p: Palette, width: number, alt: string)
 const TICK_DAYS = [1, 2, 7, 14, 30, 60, 91, 182, 365]
 const ROW = 22
 
-export const ganttColor = (p: Palette, tags: readonly string[], section: number): string =>
-  tags.includes('crit') ? p.red : tags.includes('done') ? p.muted : tags.includes('active') ? p.accent : (hues(p).slice(1)[section % 7] ?? p.blue)
-
 export const ganttSvg = (c: Gantt, p: Palette, width: number, alt: string): Card => {
   const first = Math.min(...c.tasks.map(t => t.start))
   const last = Math.max(...c.tasks.map(t => t.end))
   const span = Math.max(1, last - first)
   const sections = [...new Set(c.tasks.map(t => t.section))]
   const hasSections = sections.some(Boolean)
-  const labelW = Math.min(26, Math.max(...c.tasks.map(t => [...t.name].length))) * SMALL_CHAR + 12
+  const labelW = Math.min(26, Math.max(...c.tasks.map(t => cells(t.name)))) * SMALL_CHAR + 12
   const [x0, x1] = [PAD + labelW, width - PAD]
   const x = (day: number) => x0 + ((day - first) / span) * (x1 - x0)
   const step = TICK_DAYS.find(d => span / d <= 8) ?? 365

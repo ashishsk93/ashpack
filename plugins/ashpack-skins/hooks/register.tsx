@@ -61,7 +61,7 @@ const CHARTS_NOTE = {
   scope: 'session',
   text:
     'Charts: this session draws ```mermaid fenced blocks as pictures. It draws flowchart (or graph) TD and LR, sequenceDiagram, stateDiagram-v2, classDiagram, erDiagram, mindmap, pie, xychart-beta with bar and line series, timeline, gantt with YYYY-MM-DD dates, and quadrantChart. ' +
-    'Use one when a flow, an exchange between parts, a share of a whole or a trend reads better as a picture than as prose or a table; otherwise write as usual. Other Mermaid diagram types show as plain code.',
+    'Use one when a flow, an exchange between parts, a share of a whole or a trend reads better as a picture than as prose or a table; otherwise write as usual. Keep flowcharts to about a dozen nodes with short labels, and prefer no subgraphs. Other Mermaid diagram types show as plain code.',
 } as const
 const EDITS = new Set(['Edit', 'Write', 'MultiEdit'])
 
