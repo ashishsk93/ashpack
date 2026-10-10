@@ -1,7 +1,7 @@
 import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register, RenderInput, Timer } from 'claude-code'
 
-import type { Activity, Section, StatusData } from '../types'
+import type { Activity, ChipId, Section, StatusData } from '../types'
 import type { Segment, Span, TextSpan } from './format'
 import {
   addTask,
@@ -12,6 +12,11 @@ import {
   barSpans,
   barSvg,
   chipBarWidth,
+  CHIP_IDS,
+  chipIds,
+  chipOrder,
+  CHIPS,
+  moveChip,
   isBar,
   parseGit,
   planFromTodos,
@@ -44,6 +49,8 @@ const ACCENT = COLORS.accent
 const BLUE = COLORS.blue
 const COMPACT_KEY = 'compact' // $.store keys: toggles survive sessions
 const STATUS_KEY = 'statusOn'
+const CHIPS_KEY = 'hiddenChips'
+const ORDER_KEY = 'chipOrder'
 
 // The loader and the model chip wear the skin's accent when one is on.
 const loaderColor = async ($: EngineInterface): Promise<string> => (await skinAccent($)) || BLUE
@@ -51,6 +58,8 @@ const accentColor = async ($: EngineInterface): Promise<string> => (await skinAc
 
 const compact = atom({ plugin: 'ashpack-status', key: 'compact' } as const, false)
 const statusOn = atom({ plugin: 'ashpack-status', key: 'statusOn' } as const, true)
+const hiddenChips = atom({ plugin: 'ashpack-status', key: 'hiddenChips' } as const, [] as ChipId[])
+const orderedChips = atom({ plugin: 'ashpack-status', key: 'orderedChips' } as const, [...CHIP_IDS])
 const activity = atom({ plugin: 'ashpack-status', key: 'activity' } as const, null as Activity | null)
 const frame = atom({ plugin: 'ashpack-status', key: 'frame' } as const, 0)
 const status = atom({ plugin: 'ashpack-status', key: 'status' } as const, null as StatusData | null)
@@ -124,10 +133,10 @@ type StatusSite = RenderInput<'PromptHint'> | RenderInput<'AbovePrompt'>
 // The chips as a tree. The desktop: one strip, the bars as images (its font sets the
 // segment glyphs at odd heights), wide gaps between the chips. The terminal: a spaced
 // row of text. Both wrap when the row is short.
-function drawChips($: EngineInterface, e: StatusSite, data: StatusData, now: number, total: number, accent: string) {
+function drawChips($: EngineInterface, e: StatusSite, data: StatusData, now: number, total: number, accent: string, shown: readonly ChipId[]) {
   const { Box, Text } = $.ui.resolve(e)
   const isTerminal = e.surface === 'terminal'
-  const chips = statusChips(data, now, chipBarWidth(total), accent, isTerminal)
+  const chips = statusChips(data, now, chipBarWidth(total), accent, isTerminal, shown)
   // Svg is not in the terminal's table: resolved only off it.
   const Svg = e.surface === 'terminal' ? null : $.ui.resolve(e).Svg
   const text = (sp: TextSpan, key: string) => (
@@ -152,9 +161,10 @@ function drawChips($: EngineInterface, e: StatusSite, data: StatusData, now: num
   )
 }
 
-// Everything the chips read, in one go.
-async function statusInputs($: EngineInterface): Promise<[boolean, StatusData | null, number, string]> {
-  return Promise.all([read($, statusOn), read($, status), $.clock.now(), accentColor($)])
+// Everything the chips read, in one go; the last, the chips turned on, in their order.
+async function statusInputs($: EngineInterface): Promise<[boolean, StatusData | null, number, string, ChipId[]]> {
+  const [isOn, data, now, accent, order, hidden] = await Promise.all([read($, statusOn), read($, status), $.clock.now(), accentColor($), read($, orderedChips), read($, hiddenChips)])
+  return [isOn, data, now, accent, order.filter(id => !hidden.includes(id))]
 }
 
 // ── compact mode ─────────────────────────────────────────────────────────────
@@ -286,12 +296,39 @@ function settingRow($: EngineInterface, e: PaneInput, key: string, label: string
   )
 }
 
-function statusPage($: EngineInterface, e: PaneInput, isCompactOn: boolean, isStatusOn: boolean) {
+// One chip's row, indented under Status chips: its name and a sample of what it shows,
+// ↑ and ↓ to move it among the rows listed, then its switch.
+function chipRow($: EngineInterface, e: PaneInput, chip: (typeof CHIPS)[number], isOn: boolean, listed: readonly ChipId[]) {
+  const { Box, Button, Text } = $.ui.resolve(e)
+  const i = listed.indexOf(chip.id)
+  return (
+    <Box key={`chip-row-${chip.id}`} justifyContent="space-between" columnGap={2} paddingLeft={2}>
+      <Box flexShrink={1}>
+        <Text wrap="truncate-end">
+          {chip.label} <Text dimColor>{chip.sample}</Text>
+        </Text>
+      </Box>
+      <Box columnGap={2} flexShrink={0}>
+        <Button key={`chip-up-${chip.id}`} plain dimColor={i === 0} label="↑" onPress={() => moveChipBy($, chip.id, -1, listed)} />
+        <Button key={`chip-down-${chip.id}`} plain dimColor={i === listed.length - 1} label="↓" onPress={() => moveChipBy($, chip.id, 1, listed)} />
+        <Button key={`chip-${chip.id}`} plain dimColor={!isOn} label={isOn ? '● ON ' : '○ OFF'} onPress={() => toggleChip($, chip.id)} />
+      </Box>
+    </Box>
+  )
+}
+
+function statusPage($: EngineInterface, e: PaneInput, isCompactOn: boolean, isStatusOn: boolean, order: readonly ChipId[], hidden: readonly ChipId[]) {
   const { Box } = $.ui.resolve(e)
+  // The desktop app names the model in its own footer and draws no model chip: no row for it.
+  const listed = order.filter(id => e.surface === 'terminal' || id !== 'model')
+  const chips = listed.flatMap(id => CHIPS.filter(c => c.id === id))
   return (
     <Box key="ashpack-page:Status" flexDirection="column" rowGap={1}>
       {settingRow($, e, 'compact', 'Compact mode', 'Tool rows fold away; a popup above the prompt shows the work.', isCompactOn, () => toggle($, 'compact'))}
-      {settingRow($, e, 'status', 'Status chips', 'Model, branch, context and usage by the prompt.', isStatusOn, () => toggle($, 'statusOn'))}
+      <Box key="chips" flexDirection="column">
+        {settingRow($, e, 'status', 'Status chips', 'Model, branch, context and usage by the prompt.', isStatusOn, () => toggle($, 'statusOn'))}
+        {isStatusOn ? chips.map(c => chipRow($, e, c, !hidden.includes(c.id), listed)) : null}
+      </Box>
     </Box>
   )
 }
@@ -321,12 +358,29 @@ async function toggle($: EngineInterface, which: 'compact' | 'statusOn'): Promis
   return isOn
 }
 
+async function toggleChip($: EngineInterface, id: ChipId): Promise<void> {
+  await update($, hiddenChips, list => (list.includes(id) ? list.filter(x => x !== id) : [...list, id]))
+  await $.store.set(CHIPS_KEY, await read($, hiddenChips))
+}
+
+async function moveChipBy($: EngineInterface, id: ChipId, by: -1 | 1, listed: readonly ChipId[]): Promise<void> {
+  await update($, orderedChips, order => moveChip(order, id, by, listed))
+  await $.store.set(ORDER_KEY, await read($, orderedChips))
+}
+
 export const register: Register = on => {
   // ── shared events ──
   on('session.start', async ($, e, next) => {
-    const [storedCompact, storedStatus] = await Promise.all([$.store.get(COMPACT_KEY), $.store.get(STATUS_KEY)])
+    const [storedCompact, storedStatus, storedChips, storedOrder] = await Promise.all([
+      $.store.get(COMPACT_KEY),
+      $.store.get(STATUS_KEY),
+      $.store.get(CHIPS_KEY),
+      $.store.get(ORDER_KEY),
+    ])
     await update($, compact, () => storedCompact === true)
     await update($, statusOn, () => storedStatus !== false)
+    await update($, hiddenChips, () => chipIds(storedChips))
+    await update($, orderedChips, () => chipOrder(storedOrder))
     await resetActivity($)
     $.ui.status(undefined) // 0.1.0 pinned a plain-text line; the rows replace it
     await $.command.register({
@@ -421,14 +475,14 @@ export const register: Register = on => {
     const below = await next(e)
     if (e.props.hasSurvey) return below
     if (e.surface === 'terminal') terminalSeen = true
-    const [[isOn, data, now, accent], isCompactOn, a] = await Promise.all([statusInputs($), isCompact($), read($, activity)])
+    const [[isOn, data, now, accent, shown], isCompactOn, a] = await Promise.all([statusInputs($), isCompact($), read($, activity)])
     const showPopup = isCompactOn && e.props.isWorking
     const showStatus = isOn && data !== null && !isUnderPrompt(e) && !showPopup
     if (!showPopup && !showStatus) return below
 
     const { Box } = $.ui.resolve(e)
     const popup = showPopup ? await drawPopup($, e, a, now) : null
-    const rows = showStatus && data ? drawChips($, e, data, now, e.props.bodyColumns, accent) : null
+    const rows = showStatus && data ? drawChips($, e, data, now, e.props.bodyColumns, accent, shown) : null
 
     return (
       <Box flexDirection="column">
@@ -443,14 +497,14 @@ export const register: Register = on => {
   on('ui.render', { component: 'PromptHint' }, async ($, e, next) => {
     const below = await next(e)
     if (!isUnderPrompt(e)) return below
-    const [isOn, data, now, accent] = await statusInputs($)
+    const [isOn, data, now, accent, shown] = await statusInputs($)
     if (!isOn || data === null) return below
     const { Box } = $.ui.resolve(e)
     // Leave the right of the footer to the mode labels and the drawer.
     const total = Math.max(60, Math.min(150, (e.viewport?.columns ?? 120) - 34))
     return (
       <Box flexDirection="column">
-        {drawChips($, e, data, now, total, accent)}
+        {drawChips($, e, data, now, total, accent, shown)}
         {below}
       </Box>
     )
@@ -470,12 +524,12 @@ export const register: Register = on => {
   // page in this mod's own pane when there is no host.
   on('ui.render', { component: 'Pane', requestId: [DRAWER, PANE] }, async ($, e, next) => {
     const below = e.requestId === DRAWER ? await next(e) : null
-    const [isCompactOn, isStatusOn] = await Promise.all([read($, compact), read($, statusOn)])
+    const [isCompactOn, isStatusOn, order, hidden] = await Promise.all([read($, compact), read($, statusOn), read($, orderedChips), read($, hiddenChips)])
     const { Box } = $.ui.resolve(e)
     return (
       <Box flexDirection="column" paddingX={e.requestId === PANE ? 1 : 0}>
         {below}
-        {statusPage($, e, isCompactOn, isStatusOn)}
+        {statusPage($, e, isCompactOn, isStatusOn, order, hidden)}
       </Box>
     )
   })

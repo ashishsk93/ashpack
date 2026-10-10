@@ -1,4 +1,4 @@
-import type { GitInfo, RateWindow, Section, StatusData } from '../types'
+import type { ChipId, GitInfo, RateWindow, Section, StatusData } from '../types'
 
 // Pure helpers, kept apart from the hooks so the tests can call them directly.
 
@@ -114,11 +114,42 @@ const resetIn = (r: RateWindow, now: number): Span[] => {
   return Number.isNaN(at) ? [] : [{ text: ` ↻${shortDuration(at - now)}`, dim: true }]
 }
 
+// The chips the Status page lists, in their order, with a sample of what each shows.
+export const CHIPS: readonly { id: ChipId; label: string; sample: string }[] = [
+  { id: 'model', label: 'Model and effort', sample: '◆ Opus 5.5 · ◕ high' },
+  { id: 'branch', label: 'Branch', sample: '⎇ main ●2 ↑1' },
+  { id: 'context', label: 'Context', sample: 'ctx 42%' },
+  { id: 'session', label: 'Session limit', sample: 'session 23% ↻2h14m' },
+  { id: 'week', label: 'Weekly limits', sample: 'week 41%' },
+  { id: 'spend', label: 'Folder, cost and time', sample: 'ashpack · $1.24 · 23m' },
+]
+
+export const CHIP_IDS: readonly ChipId[] = CHIPS.map(c => c.id)
+
+// A stored list of hidden chips, kept to the ids above: $.store may hold anything.
+export const chipIds = (stored: unknown): ChipId[] => (Array.isArray(stored) ? CHIP_IDS.filter(id => stored.includes(id)) : [])
+
+// A stored order, kept to known chips in their stored place; any it lacks (one added in a
+// later version) go at the end.
+export const chipOrder = (stored: unknown): ChipId[] => {
+  const known = Array.isArray(stored) ? stored.filter((id, i): id is ChipId => CHIP_IDS.includes(id) && stored.indexOf(id) === i) : []
+  return [...known, ...CHIP_IDS.filter(id => !known.includes(id))]
+}
+
+// `id` swapped with its neighbour among `listed` (the rows a page shows): `by` -1 up, 1 down.
+// At either end, or not listed, the order stays.
+export const moveChip = (order: readonly ChipId[], id: ChipId, by: -1 | 1, listed: readonly ChipId[]): ChipId[] => {
+  const rows = order.filter(x => listed.includes(x))
+  const i = rows.indexOf(id)
+  const other = i < 0 ? undefined : rows[i + by]
+  return other ? order.map(x => (x === id ? other : x === other ? id : x)) : [...order]
+}
+
 // Chips, in order: model · effort | ⎇ branch ●n ↑n ↓n | ctx | session ↻ | week (+ per-model) ↻ | folder · $cost · time
 // `accent` colors the model: the skin's accent when one is on, else AshPack's own. With
 // `hasModel` false the model chip is left out (the desktop app names the model and effort
-// in its own footer).
-export const statusChips = (d: StatusData, now: number, barWidth: number, accent: string, hasModel = true): Cell[] => {
+// in its own footer); `shown` lists the chips to draw, in order, as the Status page set them.
+export const statusChips = (d: StatusData, now: number, barWidth: number, accent: string, hasModel = true, shown: readonly ChipId[] = CHIP_IDS): Cell[] => {
   const session = d.rateLimits.find(r => r.kind === 'five_hour')
   const weekly = d.rateLimits.filter(r => r.kind !== 'five_hour')
   const resets = new Set(weekly.map(r => r.resetsAt))
@@ -142,14 +173,15 @@ export const statusChips = (d: StatusData, now: number, barWidth: number, accent
     ...(resets.size > 1 ? resetIn(r, now) : []),
   ])
   const model: Cell = [{ text: `◆ ${prettyModel(d.model)}`, color: accent, bold: true }, ...(d.effort ? [{ text: ` · ${effortLabel(d.effort)}`, color: COLORS.blue }] : [])]
-  return [
-    ...(hasModel ? [model] : []),
-    git,
-    meter('ctx', d.contextPercent ?? 0, barWidth),
-    session ? [...meter('session', session.percentUsed, barWidth), ...resetIn(session, now)] : [{ text: 'session —', dim: true }],
-    weekly.length > 0 ? [...weeklyCell, ...(resets.size === 1 && lastWeekly ? resetIn(lastWeekly, now) : [])] : [{ text: 'week —', dim: true }],
+  const cells: Record<ChipId, Cell> = {
+    model,
+    branch: git,
+    context: meter('ctx', d.contextPercent ?? 0, barWidth),
+    session: session ? [...meter('session', session.percentUsed, barWidth), ...resetIn(session, now)] : [{ text: 'session —', dim: true }],
+    week: weekly.length > 0 ? [...weeklyCell, ...(resets.size === 1 && lastWeekly ? resetIn(lastWeekly, now) : [])] : [{ text: 'week —', dim: true }],
     spend,
-  ]
+  }
+  return shown.filter(id => hasModel || id !== 'model').map(id => cells[id])
 }
 
 export const chipBarWidth = (total: number): number => (total >= 160 ? 8 : total >= 120 ? 6 : 4)

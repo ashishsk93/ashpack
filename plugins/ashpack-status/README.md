@@ -34,7 +34,7 @@ A wave loader sits beside the running row, in the skin's accent when a skin is o
 
 ## Settings
 
-The **Status** page of the drawer has the two switches. `/ashstatus` opens it, in a pane of its own without the host. `/ashstatus compact` and `/ashstatus chips` flip one.
+The **Status** page of the drawer has the two switches. Under **Status chips**, a row per chip turns each one on or off, and its `↑` `↓` move it: model and effort, branch, context, session limit, weekly limits, and folder, cost and time (the desktop app lists no model row, since it draws no model chip). The chips show in the rows' order, and the pick is kept across sessions. `/ashstatus` opens the page, in a pane of its own without the host. `/ashstatus compact` and `/ashstatus chips` flip one.
 
 ## Install
 

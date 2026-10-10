@@ -8,6 +8,9 @@ export type GitInfo = { branch: string; dirty: number; ahead: number; behind: nu
 
 export type RateWindow = { kind: string; percentUsed: number; resetsAt?: string }
 
+// One status chip, by what it shows; the Status page turns each on or off and orders them.
+export type ChipId = 'model' | 'branch' | 'context' | 'session' | 'week' | 'spend'
+
 // What the status rows draw; refreshed by events and a timer, read while drawing.
 export type StatusData = {
   model: string
@@ -25,6 +28,8 @@ declare module 'claude-code' {
     'ashpack-status': {
       compact: boolean
       statusOn: boolean
+      hiddenChips: ChipId[]
+      orderedChips: ChipId[]
       activity: Activity | null
       frame: number
       status: StatusData | null

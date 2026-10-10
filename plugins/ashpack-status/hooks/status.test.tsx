@@ -6,6 +6,8 @@ import {
   around,
   bar,
   barSpans,
+  chipIds,
+  chipOrder,
   barSvg,
   COLORS,
   effortLabel,
@@ -49,6 +51,12 @@ test('helpers: names, bars, colors, git, loader', () => {
   expect(windowLabel('seven_day')).toBe('week')
   expect(windowLabel('seven_day_fable')).toBe('fable')
   expect(effortLabel('high')).toBe('◕ high')
+  // A stored pick keeps known chips only, in chip order.
+  expect(chipIds(['week', 'bogus', 'model'])).toEqual(['model', 'week'])
+  expect(chipIds('week')).toEqual([])
+  // A stored order keeps known chips in their stored place, then any it lacks.
+  expect(chipOrder(['spend', 'bogus', 'model'])).toEqual(['spend', 'model', 'branch', 'context', 'session', 'week'])
+  expect(chipOrder(null)).toEqual(['model', 'branch', 'context', 'session', 'week', 'spend'])
 
   expect(bar(42, 8)).toEqual(['▰▰▰', '▱▱▱▱▱'])
   expect(bar(150, 4)).toEqual(['▰▰▰▰', ''])
@@ -179,6 +187,11 @@ test('the Status page toggles compact mode and the chips; compact mode hides too
 
 test('the status chips draw model, branch, context and usage above the prompt', async ($, on) => {
   mock.store(on)
+  // Stands in for the AshPack host's drawing under its drawer pane.
+  on('ui.render', DRAWER, ($, e) => {
+    const { Box } = $.ui.resolve(e)
+    return <Box />
+  })
   const clock = mock.clock(on, { now: Date.parse('2026-10-08T10:00:00Z') })
   on('settings.read', () => ({ value: { effortLevel: 'high', permissions: { defaultMode: 'auto' } } }))
   on('command.register', () => ({ value: undefined }) as never)
@@ -262,6 +275,70 @@ test('the status chips draw model, branch, context and usage above the prompt', 
     if (surface === 'terminal') expect(flatten(await fullBand.drawn())).not.toContain('ctx')
     else expect(flatten(await fullBand.drawn())).toContain('ctx')
     await fullBand.unmount()
+  }
+
+  // The Status page picks which chips show, a row each under the Status chips switch.
+  const page = await $.ui.mount({ plugin: 'ashpack-status', surface: 'terminal', ...DRAWER, props: PANE_PROPS })
+  for (const key of ['chip-model', 'chip-branch', 'chip-context', 'chip-session', 'chip-week', 'chip-spend']) {
+    expect((await page.find({ key }))?.text).toContain('ON')
+  }
+  await page.press({ key: 'chip-branch' })
+  await page.press({ key: 'chip-week' })
+  expect((await page.find({ key: 'chip-branch' }))?.text).toContain('OFF')
+  await page.unmount()
+  // The desktop app names the model in its own footer: its page has no Model row.
+  const deskPage = await $.ui.mount({ plugin: 'ashpack-status', surface: 'desktop', ...DRAWER, props: PANE_PROPS })
+  expect(await deskPage.find({ key: 'chip-model' })).toBeUndefined()
+  expect(await deskPage.find({ key: 'chip-context' })).toBeDefined()
+  await deskPage.unmount()
+
+  // The pick survives a new session, and the band leaves those chips out.
+  await $.session.start({ source: 'startup', cwd: '/Users/ashish/Documents/Code/Mods/ashpack' } as never)
+  await clock.advance(0)
+  for (const surface of SURFACES) {
+    const band = await $.ui.mount({
+      plugin: 'ashpack-status',
+      surface,
+      component: 'AbovePrompt',
+      viewport: MAIN,
+      props: { hasSurvey: false, isWorking: false, maxRows: 10, bodyColumns: 140, scroll: { offset: 0, bodyRows: 10, contentRows: 0 }, view: {} } as never,
+    })
+    const text = flatten(await band.drawn())
+    expect(text).not.toContain('⎇ main')
+    expect(text).not.toContain('fable')
+    expect(text).toContain('ctx')
+    expect(text).toContain('session')
+    await band.unmount()
+  }
+
+  // ↑ and ↓ move a chip among the rows; the band follows, and so does a new session.
+  const order = await $.ui.mount({ plugin: 'ashpack-status', surface: 'terminal', ...DRAWER, props: PANE_PROPS })
+  await order.press({ key: 'chip-up-spend' }) // past the weekly limits, hidden or not
+  await order.press({ key: 'chip-up-spend' }) // past the session limit
+  await order.press({ key: 'chip-down-model' })
+  await order.press({ key: 'chip-up-branch' }) // already first: nothing moves
+  const rows = JSON.stringify(await order.drawn())
+  const at = (id: string) => rows.indexOf(`"key":"chip-${id}"`)
+  expect(at('branch')).toBeLessThan(at('model'))
+  expect(at('model')).toBeLessThan(at('context'))
+  expect(at('spend')).toBeLessThan(at('session'))
+  expect(at('session')).toBeLessThan(at('week'))
+  await order.unmount()
+  await $.session.start({ source: 'startup', cwd: '/Users/ashish/Documents/Code/Mods/ashpack' } as never)
+  await clock.advance(0)
+  for (const surface of SURFACES) {
+    const band = await $.ui.mount({
+      plugin: 'ashpack-status',
+      surface,
+      component: 'AbovePrompt',
+      viewport: MAIN,
+      props: { hasSurvey: false, isWorking: false, maxRows: 10, bodyColumns: 140, scroll: { offset: 0, bodyRows: 10, contentRows: 0 }, view: {} } as never,
+    })
+    const text = flatten(await band.drawn())
+    if (surface === 'terminal') expect(text.indexOf('Opus')).toBeLessThan(text.indexOf('ctx'))
+    expect(text.indexOf('ctx')).toBeLessThan(text.indexOf('$1.24'))
+    expect(text.indexOf('$1.24')).toBeLessThan(text.indexOf('session'))
+    await band.unmount()
   }
 })
 
