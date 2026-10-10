@@ -1,312 +1,149 @@
 import type { Card } from './cards'
-import { CHAR, fit, PAD, panel, text } from './cards'
-import { fitted, hues, idOf, shortNumber, small, SMALL_CHAR, wrapWords } from './chart-kit'
-import type { Point } from './flow-layout'
-import { layoutFlow } from './flow-layout'
-import type { Chart, Flow, FlowName, FlowNode, Pie, Sequence, Shape, XY } from './mermaid'
+import { CHAR, PAD, panel, text } from './cards'
+import { actorHues, cells, clip, fitted, hues, numberedSteps, shortNumber, small, SMALL_CHAR, widest, wrapWords } from './chart-kit'
 import { ganttSvg, quadrantSvg, timelineSvg } from './charts-more'
+import { ARROW, flowCard, head } from './flow-svg'
+import type { Chart, Pie, Sequence, Step, XY } from './mermaid'
 import type { Palette } from './skins'
 
-// Chart cards the desktop app draws as images: a flowchart, a sequence diagram, a pie and
-// an xy chart (bars and lines), in the skin's colours. Each is a card like the code and
-// table cards: an outline, a header, the drawing under it. Pure: chart in, SVG out.
-
-// ── flowchart ──
-
-const NODE_CHARS = 22
-const NODE_LINE = 16
-const ARROW = 7
-
-const shapeColor = (p: Palette, shape: Shape): string =>
-  shape === 'diamond' ? p.yellow : shape === 'hex' ? p.purple : shape === 'rect' ? p.blue : p.green
-
-const nodeLines = (n: FlowNode) => wrapWords(n.label, NODE_CHARS)
-
-// A node with a body (a class, an entity): its name over a hairline, then a line per member.
-const BODY_CHARS = 34
-const bodyLines = (n: FlowNode): string[] => (n.body ?? []).map(l => ([...l].length > BODY_CHARS ? `${[...l].slice(0, BODY_CHARS - 1).join('')}…` : l))
-
-const nodeSize = (n: FlowNode) => {
-  if (n.body) {
-    const all = [n.label, ...bodyLines(n)]
-    return { w: Math.max(...all.map(l => [...l].length)) * CHAR + 24, h: 26 + Math.max(1, n.body.length) * NODE_LINE + 8 }
-  }
-  const lines = nodeLines(n)
-  const tw = Math.max(...lines.map(l => [...l].length)) * CHAR
-  const th = lines.length * NODE_LINE
-  if (n.shape === 'diamond') return { w: tw * 1.4 + 28, h: th * 1.8 + 14 }
-  if (n.shape === 'circle') return { w: Math.max(tw, th) + 28, h: Math.max(tw, th) + 28 }
-  return { w: tw + (n.shape === 'hex' ? 44 : 28), h: th + 18 }
-}
-
-const nodeSvg = (p: Palette, n: FlowNode, c: Point, s: { w: number; h: number }) => {
-  const color = shapeColor(p, n.shape)
-  const paint = `fill="${color}" fill-opacity=".1" stroke="${color}" stroke-width="1.5"`
-  const [l, t, r, b] = [c.x - s.w / 2, c.y - s.h / 2, c.x + s.w / 2, c.y + s.h / 2]
-  if (n.body) {
-    return (
-      `<rect x="${l}" y="${t}" width="${s.w}" height="${s.h}" rx="4" ${paint}/>` +
-      text(c.x, t + 17, n.label, p.text, ' text-anchor="middle" font-weight="600"') +
-      `<line x1="${l}" y1="${t + 26}" x2="${r}" y2="${t + 26}" stroke="${color}" stroke-opacity=".6"/>` +
-      bodyLines(n).map((line, i) => small(l + 10, t + 26 + 15 + i * NODE_LINE, line, p.text)).join('')
-    )
-  }
-  const outline =
-    n.shape === 'diamond'
-      ? `<polygon points="${c.x},${t} ${r},${c.y} ${c.x},${b} ${l},${c.y}" ${paint}/>`
-      : n.shape === 'hex'
-        ? `<polygon points="${l + 14},${t} ${r - 14},${t} ${r},${c.y} ${r - 14},${b} ${l + 14},${b} ${l},${c.y}" ${paint}/>`
-        : n.shape === 'circle'
-          ? `<circle cx="${c.x}" cy="${c.y}" r="${s.w / 2}" ${paint}/>`
-          : `<rect x="${l}" y="${t}" width="${s.w}" height="${s.h}" rx="${n.shape === 'pill' ? s.h / 2 : n.shape === 'round' ? 10 : 4}" ${paint}/>`
-  const lines = nodeLines(n)
-  const top = c.y - (lines.length * NODE_LINE) / 2 + 12
-  return outline + lines.map((line, i) => text(c.x, top + i * NODE_LINE, line, p.text, ' text-anchor="middle"')).join('')
-}
-
-// A smooth path through the route, leaving and arriving along the rank axis.
-const curve = (pts: readonly Point[], isLR: boolean): string =>
-  pts.reduce((d, b, i) => {
-    const a = pts[i - 1]
-    if (!a) return `M${b.x.toFixed(1)},${b.y.toFixed(1)}`
-    const m = isLR ? (a.x + b.x) / 2 : (a.y + b.y) / 2
-    const [c1, c2] = isLR ? [`${m},${a.y}`, `${m},${b.y}`] : [`${a.x},${m}`, `${b.x},${m}`]
-    return `${d} C${c1} ${c2} ${b.x.toFixed(1)},${b.y.toFixed(1)}`
-  }, '')
-
-// An arrowhead with its tip at `tip`, pointing along (dx, dy).
-const head = (tip: Point, dx: number, dy: number, color: string) => {
-  const [bx, by] = [tip.x - dx * ARROW, tip.y - dy * ARROW]
-  const [px, py] = [-dy * 4.5, dx * 4.5]
-  return `<polygon points="${tip.x},${tip.y} ${bx + px},${by + py} ${bx - px},${by - py}" fill="${color}"/>`
-}
-
-// The route pulled back from each end that carries a head, so the line stops at its base.
-const trimmed = (pts: readonly Point[], isLR: boolean, atStart: boolean, atEnd: boolean): Point[] => {
-  const pull = (a: Point, toward: Point): Point => {
-    const s = Math.sign(isLR ? toward.x - a.x : toward.y - a.y)
-    return isLR ? { x: a.x + s * ARROW, y: a.y } : { x: a.x, y: a.y + s * ARROW }
-  }
-  const first = pts[0]
-  const last = pts.at(-1)
-  if (!first || !last || pts.length < 2) return [...pts]
-  return [atStart ? pull(first, pts[1] ?? last) : first, ...pts.slice(1, -1), atEnd ? pull(last, pts.at(-2) ?? first) : last]
-}
-
-type Box = { x: number; y: number; w: number; h: number }
-const overlaps = (a: Box, b: Box): boolean => a.x < b.x + b.w && b.x < a.x + a.w && a.y < b.y + b.h && b.y < a.y + a.h
-
-// Fractions along a route a label tries, in turn.
-const LABEL_SPOTS = [0.5, 0.2, 0.8, 0.1, 0.9, 0.35, 0.65]
-
-// The point `u` of the way along a route as `curve` draws it: each segment a cubic
-// leaving and arriving along the rank axis.
-const pointOn = (pts: readonly Point[], isLR: boolean, u: number): Point => {
-  const segs = Math.max(1, pts.length - 1)
-  const k = Math.min(segs - 1, Math.floor(u * segs))
-  const t = u * segs - k
-  const [a, b] = [pts[k] ?? { x: 0, y: 0 }, pts[k + 1] ?? pts[k] ?? { x: 0, y: 0 }]
-  const m = isLR ? (a.x + b.x) / 2 : (a.y + b.y) / 2
-  const [c1, c2] = isLR ? [{ x: m, y: a.y }, { x: m, y: b.y }] : [{ x: a.x, y: m }, { x: b.x, y: m }]
-  const mt = 1 - t
-  const at = (p0: number, p1: number, p2: number, p3: number) => mt ** 3 * p0 + 3 * mt ** 2 * t * p1 + 3 * mt * t ** 2 * p2 + t ** 3 * p3
-  return { x: at(a.x, c1.x, c2.x, b.x), y: at(a.y, c1.y, c2.y, b.y) }
-}
-
-const flowDrawing = (f: Flow, p: Palette, dir: Flow['dir']) => {
-  const sizes = f.nodes.map(nodeSize)
-  const index = new Map(f.nodes.map((n, i) => [n.id, i]))
-  const links = f.edges.map(e => [index.get(e.from) ?? 0, index.get(e.to) ?? 0] as const)
-  const isLR = dir === 'LR' || dir === 'RL'
-  const labelW = (e: { label: string }) => [...e.label].length * SMALL_CHAR + 8
-  // Labelled edges get longer lines, so their labels have room between the ranks: down the
-  // page a little more, across it as wide as the widest label.
-  const widest = Math.max(0, ...f.edges.filter(e => e.label !== '' && e.from !== e.to).map(labelW))
-  const rank = isLR ? Math.max(64, widest + 24) : widest > 0 ? 62 : 46
-  const lay = layoutFlow(sizes, links, dir, { rank, cross: 28, margin: 6 })
-  const labels: string[] = []
-  const holes: string[] = []
-  // Where labels may not go: the nodes, then each label placed so far.
-  const taken: Box[] = f.nodes.map((_, i) => {
-    const [c, s] = [lay.centers[i] ?? { x: 0, y: 0 }, sizes[i] ?? { w: 0, h: 0 }]
-    return { x: c.x - s.w / 2, y: c.y - s.h / 2, w: s.w, h: s.h }
-  })
-  // What the drawing reaches: the layout, then any bowed line or label past it.
-  const ext = { x0: 0, y0: 0, x1: lay.width, y1: lay.height }
-  const reach = (b: Box) => {
-    ext.x0 = Math.min(ext.x0, b.x - 4)
-    ext.y0 = Math.min(ext.y0, b.y - 4)
-    ext.x1 = Math.max(ext.x1, b.x + b.w + 4)
-    ext.y1 = Math.max(ext.y1, b.y + b.h + 4)
-  }
-  // Edges between the same two nodes (either way) bow apart, so neither line nor label overlaps.
-  const pairOf = (e: { from: string; to: string }) => [e.from, e.to].sort().join('\u0000')
-  const pairs = f.edges.map(pairOf)
-  const spread = (i: number) => {
-    const group = pairs.flatMap((k, j) => (k === pairs[i] ? [j] : []))
-    const step = Math.max(28, ...group.map(j => (isLR ? 18 : labelW(f.edges[j] ?? { label: '' }) + 4)))
-    return (group.indexOf(i) - (group.length - 1) / 2) * step
-  }
-  const bowed = (pts: readonly Point[], by: number): Point[] => {
-    if (by === 0 || pts.length < 2) return [...pts]
-    const shift = (q: Point): Point => (isLR ? { x: q.x, y: q.y + by } : { x: q.x + by, y: q.y })
-    const [a, b] = [pts[0], pts.at(-1)]
-    const inner = pts.length > 2 ? pts.slice(1, -1).map(shift) : a && b ? [shift({ x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 })] : []
-    return [...pts.slice(0, 1), ...inner, ...pts.slice(-1)]
-  }
-  const loopsSoFar = new Map<string, number>()
-  const lines = f.edges.map((e, i) => {
-    const color = p.muted
-    const stroke = `stroke="${color}" stroke-width="${e.line === 'thick' ? 2.6 : 1.4}" fill="none"${e.line === 'dotted' ? ' stroke-dasharray="4 4"' : ''}`
-    const c = lay.centers[links[i]?.[0] ?? 0] ?? { x: 0, y: 0 }
-    const s = sizes[links[i]?.[0] ?? 0] ?? { w: 0, h: 0 }
-    // A node's edge to itself: a loop off its right side, each further one wider; its label
-    // beside it, clear of what is already placed, like any other.
-    if (e.from === e.to) {
-      const k = loopsSoFar.get(e.from) ?? 0
-      loopsSoFar.set(e.from, k + 1)
-      const [x, bulge] = [c.x + s.w / 2, 30 + k * 16]
-      reach({ x, y: c.y - 24 - k * 4, w: bulge, h: 48 + k * 8 })
-      if (e.label) {
-        const w = labelW(e)
-        const spots = [0, 16, -16, 32, -32].map(dy => ({ x: x + bulge + 2, y: c.y - 9 + dy, w, h: 16 }))
-        const box = spots.find(b => !taken.some(t => overlaps(t, b))) ?? spots[0] ?? { x, y: c.y, w, h: 16 }
-        taken.push(box)
-        reach(box)
-        labels.push(small(box.x + 4, box.y + 12.5, e.label, p.text))
-      }
-      return `<path d="M${x},${c.y - 8} C${x + bulge},${c.y - 24 - k * 4} ${x + bulge},${c.y + 24 + k * 4} ${x + ARROW},${c.y + 8}" ${stroke}/>` + head({ x, y: c.y + 6 }, -1, -0.3, color)
-    }
-    const pts = bowed(lay.routes[i] ?? [], spread(i))
-    pts.forEach(q => reach({ x: q.x, y: q.y, w: 0, h: 0 }))
-    const last = pts.at(-1)
-    const before = pts.at(-2)
-    const first = pts[0]
-    const second = pts[1]
-    if (!last || !before || !first || !second) return ''
-    const along = (a: Point, b: Point) => (isLR ? [Math.sign(b.x - a.x), 0] : [0, Math.sign(b.y - a.y)]) as [number, number]
-    const [atStart, atEnd] = [e.head === 'both' || e.head === 'start', e.head === 'both' || e.head === 'arrow']
-    const heads = (atEnd ? head(last, ...along(before, last), color) : '') + (atStart ? head(first, ...along(second, first), color) : '')
-    if (e.label) {
-      // The label sits on its line, the line masked out behind it: halfway along, or the
-      // first spot nearer either end that is clear of nodes and other labels.
-      const w = labelW(e)
-      const boxAt = (q: Point): Box => ({ x: q.x - w / 2, y: q.y - 9, w, h: 16 })
-      const spots = LABEL_SPOTS.map(u => pointOn(pts, isLR, u))
-      const at = spots.find(q => !taken.some(b => overlaps(b, boxAt(q)))) ?? spots[0] ?? first
-      taken.push(boxAt(at))
-      reach(boxAt(at))
-      holes.push(`<rect x="${at.x - w / 2}" y="${at.y - 9}" width="${w}" height="16" fill="black"/>`)
-      labels.push(small(at.x, at.y + 3.5, e.label, p.text, ' text-anchor="middle"'))
-    }
-    return `<path d="${curve(trimmed(pts, isLR, atStart, atEnd), isLR)}" ${stroke}/>` + heads
-  })
-  const [w, h] = [ext.x1 - ext.x0, ext.y1 - ext.y0]
-  const id = idOf(alt(f) + dir)
-  const mask = `<mask id="${id}" maskUnits="userSpaceOnUse" x="${ext.x0}" y="${ext.y0}" width="${w}" height="${h}"><rect x="${ext.x0}" y="${ext.y0}" width="${w}" height="${h}" fill="white"/>${holes.join('')}</mask>`
-  const drawing =
-    mask +
-    `<g mask="url(#${id})">${lines.join('')}</g>` +
-    labels.join('') +
-    f.nodes.map((n, i) => nodeSvg(p, n, lay.centers[i] ?? { x: 0, y: 0 }, sizes[i] ?? { w: 0, h: 0 })).join('')
-  return { inner: `<g transform="translate(${-ext.x0} ${-ext.y0})">${drawing}</g>`, w, h }
-}
-
-const UNITS: Record<FlowName | 'flowchart', string> = { flowchart: 'steps', 'state diagram': 'states', 'mind map': 'topics', 'class diagram': 'classes', 'ER diagram': 'entities' }
-
-const flowSvg = (f: Flow, p: Palette, width: number): Card => {
-  // A chart across the page too wide to read is turned down the page.
-  const across = flowDrawing(f, p, f.dir)
-  const isLR = f.dir === 'LR' || f.dir === 'RL'
-  const d = isLR && (width - PAD * 2) / across.w < 0.75 ? flowDrawing(f, p, 'TD') : across
-  const { body, height } = fitted(d.inner, d.w, d.h, width)
-  const mark: [string, string] = [`${f.nodes.length} ${UNITS[f.name ?? 'flowchart']}`, p.muted]
-  return panel(p, width, f.name ?? 'flowchart', mark, body, height, alt(f))
-}
+// Chart cards the desktop app draws as images: a flowchart (flow-svg.ts), a sequence diagram,
+// a pie and an xy chart (bars and lines), in the skin's colours. Each is a card like the code
+// and table cards: an outline, a header, the drawing under it. Pure: chart in, SVG out.
 
 // ── sequence diagram ──
 
 const ACTOR_H = 30
+const TEXT_CHARS = 32 // a message's or note's line; an actor's name at most
+const TEXT_LINE = 13
+const NOTE_LINES = 3
 
-const sequenceSvg = (s: Sequence, p: Palette, width: number): Card => {
-  const colors = hues(p).slice(1).concat(hues(p).slice(0, 1))
-  const aw = s.actors.map(a => Math.max(64, [...a.name].length * CHAR + 24))
-  const spans = s.steps.flatMap(st => (st.kind === 'msg' && st.from !== st.to ? [{ k: Math.abs(st.to - st.from), w: [...st.text].length * SMALL_CHAR + 28 }] : []))
-  const gap = Math.max(120, ...aw.slice(1).map((w, i) => ((aw[i] ?? 0) + w) / 2 + 24), ...spans.map(x => x.w / x.k))
-  const x0 = PAD + (aw[0] ?? 0) / 2
-  const xs = s.actors.map((_, i) => x0 + i * gap)
-  const hasSelf = s.steps.some(st => st.kind === 'msg' && st.from === st.to)
-  const w = (xs.at(-1) ?? x0) + (aw.at(-1) ?? 0) / 2 + PAD + (hasSelf ? 60 : 0)
-  const out: string[] = []
-  const groups: { y: number; depth: number; keyword: string; label: string }[] = []
-  let y = 10 + ACTOR_H + 18
-  for (const st of s.steps) {
-    const depth = groups.length
-    const left = PAD / 2 + depth * 6
-    const right = w - PAD / 2 - depth * 6
-    if (st.kind === 'msg') {
-      const [a, b] = [xs[st.from] ?? x0, xs[st.to] ?? x0]
-      const dash = st.isDashed ? ' stroke-dasharray="5 4"' : ''
-      if (a === b) {
-        out.push(small(a + 10, y + 10, st.text, p.text))
-        out.push(`<path d="M${a},${y + 16} h28 v14 h-${28 - ARROW}" fill="none" stroke="${p.muted}" stroke-width="1.4"${dash}/>` + head({ x: a, y: y + 30 }, -1, 0, p.muted))
-        y += 42
-        continue
+type Msg = Extract<Step, { kind: 'msg' }>
+type Note = Extract<Step, { kind: 'note' }>
+
+const textLines = (t: string, lines: number): string[] => wrapWords(t, TEXT_CHARS, lines)
+const textWidth = (lines: readonly string[]): number => widest(lines) * SMALL_CHAR
+
+// A note's box: over its actor (or between two), or beside the lifeline on the side it names.
+const noteBox = (st: Note, xs: readonly number[], lines: readonly string[]): { x: number; w: number } => {
+  const [a, b] = [xs[st.from] ?? 0, xs[st.to] ?? 0].sort((m, n) => m - n) as [number, number]
+  const tw = textWidth(lines) + 20
+  if (st.place === 'left') return { x: (xs[st.from] ?? 0) - 8 - tw, w: tw }
+  if (st.place === 'right') return { x: (xs[st.from] ?? 0) + 8, w: tw }
+  const w = Math.max(b - a + 60, tw)
+  return { x: (a + b) / 2 - w / 2, w }
+}
+
+// How far right of its lifeline a message to itself reaches: its loop, or its text.
+const selfReach = (st: Msg): number => Math.max(28, 10 + textWidth(textLines(st.text, 2)))
+
+// Each actor's centre, far enough apart for the names and the messages between them, then
+// shifted right so every note and self-message lands inside the card; and the card's width.
+const columns = (s: Sequence, steps: readonly Step[]) => {
+  const names = s.actors.map(a => clip(a.name, TEXT_CHARS))
+  const aw = names.map(nm => Math.max(64, cells(nm) * CHAR + 24))
+  const spans = steps.flatMap(st => (st.kind === 'msg' && st.from !== st.to ? [(textWidth(textLines(st.text, 2)) + 28) / Math.abs(st.to - st.from)] : []))
+  const gap = Math.max(120, ...aw.slice(1).map((w, i) => ((aw[i] ?? 0) + w) / 2 + 24), ...spans)
+  const rel = s.actors.map((_, i) => i * gap)
+  const reaches = [
+    ...rel.flatMap((x, i) => [x - (aw[i] ?? 0) / 2, x + (aw[i] ?? 0) / 2]),
+    ...steps.flatMap(st => {
+      if (st.kind === 'note') {
+        const box = noteBox(st, rel, textLines(st.text, NOTE_LINES))
+        return [box.x, box.x + box.w]
       }
-      const dir = Math.sign(b - a)
-      out.push(small((a + b) / 2, y + 10, st.text, p.text, ' text-anchor="middle"'))
-      out.push(`<line x1="${a}" y1="${y + 18}" x2="${b - dir * ARROW}" y2="${y + 18}" stroke="${p.muted}" stroke-width="1.4"${dash}/>`)
-      out.push(
-        st.isCross
-          ? `<path d="M${b - 5},${y + 13} l10,10 M${b + 5},${y + 13} l-10,10" stroke="${p.red}" stroke-width="1.6"/>`
-          : head({ x: b, y: y + 18 }, dir, 0, p.text),
-      )
-      y += 32
-    } else if (st.kind === 'note') {
-      const [a, b] = [Math.min(xs[st.from] ?? x0, xs[st.to] ?? x0), Math.max(xs[st.from] ?? x0, xs[st.to] ?? x0)]
-      const nw = Math.max(b - a + 60, [...st.text].length * SMALL_CHAR + 20)
-      const nx = (a + b) / 2 - nw / 2
-      out.push(`<rect x="${nx}" y="${y}" width="${nw}" height="24" rx="4" fill="${p.yellow}" fill-opacity=".1" stroke="${p.yellow}" stroke-opacity=".7"/>`)
-      out.push(small((a + b) / 2, y + 16, st.text, p.text, ' text-anchor="middle"'))
-      y += 34
-    } else if (st.kind === 'open') {
-      groups.push({ y, depth, keyword: st.keyword, label: st.label })
-      out.push(text(left + 8, y + 15, st.keyword, p.accent, ' font-weight="600"') + small(left + 16 + [...st.keyword].length * CHAR, y + 15, st.label, p.muted))
-      y += 26
-    } else if (st.kind === 'else') {
-      const l = PAD / 2 + (depth - 1) * 6
-      out.push(`<line x1="${l}" y1="${y + 4}" x2="${w - l}" y2="${y + 4}" stroke="${p.muted}" stroke-opacity=".6" stroke-dasharray="4 4"/>`)
-      out.push(small(l + 8, y + 18, `${st.keyword}${st.label ? ` ${st.label}` : ''}`, p.muted))
-      y += 26
-    } else {
-      const g = groups.pop()
-      if (g) {
-        const l = PAD / 2 + g.depth * 6
-        out.push(`<rect x="${l}" y="${g.y}" width="${w - l * 2}" height="${y - g.y + 4}" rx="5" fill="none" stroke="${p.muted}" stroke-opacity=".6"/>`)
-      }
-      y += 12
-    }
+      return st.kind === 'msg' && st.from === st.to ? [(rel[st.from] ?? 0) + selfReach(st)] : []
+    }),
+  ]
+  const shift = PAD - Math.min(...reaches)
+  return { names, aw, xs: rel.map(x => x + shift), w: Math.max(...reaches) + shift + PAD }
+}
+
+type Seq = { p: Palette; xs: readonly number[]; w: number; groups: { y: number; depth: number }[] }
+
+// A message: its text over its arrow (a loop, to itself); and the room it takes.
+const msgSvg = (c: Seq, st: Msg, y: number): [string, number] => {
+  const [a, b] = [c.xs[st.from] ?? 0, c.xs[st.to] ?? 0]
+  const lines = textLines(st.text, 2)
+  const extra = (lines.length - 1) * TEXT_LINE
+  const stroke = `stroke="${c.p.muted}" stroke-width="1.4"${st.isDashed ? ' stroke-dasharray="5 4"' : ''}`
+  if (a === b) {
+    const label = lines.map((l, j) => small(a + 10, y + 10 + j * TEXT_LINE, l, c.p.text)).join('')
+    const at = y + extra
+    return [label + `<path d="M${a},${at + 16} h28 v14 h-${28 - ARROW}" fill="none" ${stroke}/>` + head({ x: a, y: at + 30 }, -1, 0, c.p.muted), 42 + extra]
   }
-  const h = y + 8
-  const actors = s.actors
-    .map((a, i) => {
-      const x = xs[i] ?? x0
-      const c = colors[i % colors.length] ?? p.blue
-      const bw = aw[i] ?? 64
+  const dir = Math.sign(b - a)
+  const label = lines.map((l, j) => small((a + b) / 2, y + 10 + j * TEXT_LINE, l, c.p.text, ' text-anchor="middle"')).join('')
+  const at = y + 18 + extra
+  const tip = st.isCross ? `<path d="M${b - 5},${at - 5} l10,10 M${b + 5},${at - 5} l-10,10" stroke="${c.p.red}" stroke-width="1.6"/>` : head({ x: b, y: at }, dir, 0, c.p.text)
+  return [label + `<line x1="${a}" y1="${at}" x2="${b - dir * ARROW}" y2="${at}" ${stroke}/>` + tip, 32 + extra]
+}
+
+const noteSvg = (c: Seq, st: Note, y: number): [string, number] => {
+  const lines = textLines(st.text, NOTE_LINES)
+  const box = noteBox(st, c.xs, lines)
+  const h = 24 + (lines.length - 1) * TEXT_LINE
+  const rect = `<rect x="${box.x}" y="${y}" width="${box.w}" height="${h}" rx="4" fill="${c.p.yellow}" fill-opacity=".1" stroke="${c.p.yellow}" stroke-opacity=".7"/>`
+  return [rect + lines.map((l, j) => small(box.x + box.w / 2, y + 16 + j * TEXT_LINE, l, c.p.text, ' text-anchor="middle"')).join(''), h + 10]
+}
+
+// A group's keyword and label (`alt ok`), cut to the card.
+const groupHead = (c: Seq, x: number, y: number, keyword: string, label: string, isOpen: boolean): string => {
+  const kw = isOpen ? text(x, y, keyword, c.p.accent, ' font-weight="600"') : small(x, y, keyword, c.p.muted)
+  const lx = x + cells(keyword) * (isOpen ? CHAR : SMALL_CHAR) + 8
+  return kw + (label ? small(lx, y, clip(label, Math.floor((c.w - PAD / 2 - lx) / SMALL_CHAR)), c.p.muted) : '')
+}
+
+const stepSvg = (c: Seq, st: Step, y: number): [string, number] => {
+  const depth = c.groups.length
+  if (st.kind === 'msg') return msgSvg(c, st, y)
+  if (st.kind === 'note') return noteSvg(c, st, y)
+  if (st.kind === 'open') {
+    c.groups.push({ y, depth })
+    return [groupHead(c, PAD / 2 + depth * 6 + 8, y + 15, st.keyword, st.label, true), 26]
+  }
+  if (st.kind === 'else') {
+    const l = PAD / 2 + (depth - 1) * 6
+    const line = `<line x1="${l}" y1="${y + 4}" x2="${c.w - l}" y2="${y + 4}" stroke="${c.p.muted}" stroke-opacity=".6" stroke-dasharray="4 4"/>`
+    return [line + groupHead(c, l + 8, y + 18, st.keyword, st.label, false), 26]
+  }
+  const g = c.groups.pop()
+  const l = PAD / 2 + (g?.depth ?? 0) * 6
+  return [g ? `<rect x="${l}" y="${g.y}" width="${c.w - l * 2}" height="${y - g.y + 4}" rx="5" fill="none" stroke="${c.p.muted}" stroke-opacity=".6"/>` : '', 12]
+}
+
+const actorsSvg = (p: Palette, names: readonly string[], aw: readonly number[], xs: readonly number[], h: number): string => {
+  const colors = actorHues(p)
+  return names
+    .map((name, i) => {
+      const [x, c, bw] = [xs[i] ?? 0, colors[i % colors.length] ?? p.blue, aw[i] ?? 64]
       return (
         `<line x1="${x}" y1="${10 + ACTOR_H}" x2="${x}" y2="${h - 6}" stroke="${p.muted}" stroke-opacity=".5" stroke-dasharray="3 4"/>` +
         `<rect x="${x - bw / 2}" y="10" width="${bw}" height="${ACTOR_H}" rx="6" fill="${c}" fill-opacity=".1" stroke="${c}" stroke-width="1.5"/>` +
-        text(x, 10 + ACTOR_H / 2 + 4, a.name, p.text, ' text-anchor="middle" font-weight="600"')
+        text(x, 10 + ACTOR_H / 2 + 4, name, p.text, ' text-anchor="middle" font-weight="600"')
       )
     })
     .join('')
-  const { body, height } = fitted(actors + out.join(''), w, h, width)
-  return panel(p, width, 'sequence', [`${s.actors.length} actors`, p.muted], body, height, alt(s))
+}
+
+const sequenceSvg = (s: Sequence, p: Palette, width: number, alt: string): Card | null => {
+  const steps = numberedSteps(s)
+  const { names, aw, xs, w } = columns(s, steps)
+  const c: Seq = { p, xs, w, groups: [] }
+  const out: string[] = []
+  let y = 10 + ACTOR_H + 18
+  for (const st of steps) {
+    const [svg, dy] = stepSvg(c, st, y)
+    out.push(svg)
+    y += dy
+  }
+  const h = y + 8
+  const fit = fitted(actorsSvg(p, names, aw, xs, h) + out.join(''), w, h, width)
+  return fit && panel(p, width, s.title || 'sequence', [`${s.actors.length} actors`, p.muted], fit.body, fit.height, alt)
 }
 
 // ── pie ──
 
-const pieSvg = (pie: Pie, p: Palette, width: number): Card => {
+const pieSvg = (pie: Pie, p: Palette, width: number, alt: string): Card => {
   const colors = hues(p)
   const total = pie.slices.reduce((a, s) => a + s.value, 0)
   const R = 64
@@ -333,14 +170,14 @@ const pieSvg = (pie: Pie, p: Palette, width: number): Card => {
     const pct = `${Math.round((s.value / total) * 100)}%`
     return (
       `<rect x="${lx}" y="${y - 9}" width="10" height="10" rx="2" fill="${color}"/>` +
-      text(lx + 18, y, fit(s.label, right - valueW - 70 - (lx + 18)), p.text) +
+      text(lx + 18, y, clip(s.label, Math.floor((right - valueW - 70 - (lx + 18)) / CHAR)), p.text) +
       text(right - valueW - 14, y, pct, color, ' text-anchor="end" font-weight="600"') +
       text(right, y, shortNumber(s.value), p.muted, ' text-anchor="end"')
     )
   })
   const center = text(cx, cy + 2, shortNumber(total), p.text, ' text-anchor="middle" font-weight="600"') + small(cx, cy + 16, 'total', p.muted, ' text-anchor="middle"')
   const height = Math.max(2 * R + 32, pie.slices.length * 22 + 20)
-  return panel(p, width, pie.title || 'pie', [`${pie.slices.length} parts`, p.muted], slices.join('') + center + legend.join(''), height, alt(pie))
+  return panel(p, width, pie.title || 'pie', [`${pie.slices.length} parts`, p.muted], slices.join('') + center + legend.join(''), height, alt)
 }
 
 // ── xy chart: bars and lines ──
@@ -354,7 +191,7 @@ export const niceStep = (span: number): number => {
   return ([1, 2, 5, 10].find(m => m * pow >= raw) ?? 10) * pow
 }
 
-const xySvg = (c: XY, p: Palette, width: number): Card => {
+const xySvg = (c: XY, p: Palette, width: number, alt: string): Card => {
   const colors = hues(p)
   const values = c.series.flatMap(s => s.values)
   // The axis: the y-axis line's range when it is a real one, else the data's from 0; never empty.
@@ -396,20 +233,20 @@ const xySvg = (c: XY, p: Palette, width: number): Card => {
   })
   // Category names under the bands; every k-th when they are too close to read.
   const every = Math.max(1, Math.ceil((4 * SMALL_CHAR) / band))
-  const xLabels = c.xLabels.map((l, i) => (i % every === 0 ? small(left + (i + 0.5) * band, bottom + 16, l.length * SMALL_CHAR > band * every - 4 ? `${l.slice(0, Math.max(1, Math.floor((band * every - 4) / SMALL_CHAR) - 1))}…` : l, p.muted, ' text-anchor="middle"') : '')).join('')
+  const xLabels = c.xLabels.map((l, i) => (i % every === 0 ? small(left + (i + 0.5) * band, bottom + 16, clip(l, Math.max(1, Math.floor((band * every - 4) / SMALL_CHAR))), p.muted, ' text-anchor="middle"') : '')).join('')
   const hasLegend = c.series.length > 1
   const legend = hasLegend
     ? c.series
         .map((s, i) => {
           const x = left + i * 120
-          return `<rect x="${x}" y="${bottom + 30}" width="10" height="10" rx="2" fill="${colorOf(i)}"/>` + small(x + 16, bottom + 39, s.name || `${s.kind} ${i + 1}`, p.text)
+          return `<rect x="${x}" y="${bottom + 30}" width="10" height="10" rx="2" fill="${colorOf(i)}"/>` + small(x + 16, bottom + 39, clip(s.name || `${s.kind} ${i + 1}`, 15), p.text)
         })
         .join('')
     : ''
-  const yTitle = c.yTitle ? small(left, 14, c.yTitle, p.muted) : ''
+  const yTitle = c.yTitle ? small(left, 14, clip(c.yTitle, Math.floor((right - left) / SMALL_CHAR)), p.muted) : ''
   const kinds = [...new Set(c.series.map(s => s.kind))].join(' + ')
   const body = yTitle + grid + drawn.join('') + xLabels + legend
-  return panel(p, width, c.title || 'chart', [kinds, p.muted], body, bottom + (hasLegend ? 50 : 28), alt(c))
+  return panel(p, width, c.title || 'chart', [kinds, p.muted], body, bottom + (hasLegend ? 50 : 28), alt)
 }
 
 // ── every chart ──
@@ -419,10 +256,11 @@ export const alt = (c: Chart): string => {
   switch (c.kind) {
     case 'flow': {
       const name = new Map(c.nodes.map(n => [n.id, n.label]))
-      return c.edges.map(e => `${name.get(e.from) ?? e.from} -> ${name.get(e.to) ?? e.to}${e.label ? ` (${e.label})` : ''}`).join('\n') || c.nodes.map(n => n.label).join('\n')
+      const lines = c.edges.map(e => `${name.get(e.from) ?? e.from} -> ${name.get(e.to) ?? e.to}${e.label ? ` (${e.label})` : ''}`)
+      return [c.title ?? '', ...(lines.length > 0 ? lines : c.nodes.map(n => n.label))].filter(Boolean).join('\n')
     }
     case 'sequence':
-      return c.steps.flatMap(st => (st.kind === 'msg' ? [`${c.actors[st.from]?.name} -> ${c.actors[st.to]?.name}: ${st.text}`] : [])).join('\n')
+      return [c.title ?? '', ...numberedSteps(c).flatMap(st => (st.kind === 'msg' ? [`${c.actors[st.from]?.name} -> ${c.actors[st.to]?.name}: ${st.text}`] : []))].filter(Boolean).join('\n')
     case 'pie':
       return [c.title, ...c.slices.map(s => `${s.label}: ${s.value}`)].filter(Boolean).join('\n')
     case 'xy':
@@ -436,16 +274,17 @@ export const alt = (c: Chart): string => {
   }
 }
 
-export const chartSvg = (c: Chart, p: Palette, width: number): Card => {
+// The card, or null when it would draw too small to read at this width.
+export const chartCard = (c: Chart, p: Palette, width: number): Card | null => {
   switch (c.kind) {
     case 'flow':
-      return flowSvg(c, p, width)
+      return flowCard(c, p, width, alt(c))
     case 'sequence':
-      return sequenceSvg(c, p, width)
+      return sequenceSvg(c, p, width, alt(c))
     case 'pie':
-      return pieSvg(c, p, width)
+      return pieSvg(c, p, width, alt(c))
     case 'xy':
-      return xySvg(c, p, width)
+      return xySvg(c, p, width, alt(c))
     case 'timeline':
       return timelineSvg(c, p, width, alt(c))
     case 'gantt':
@@ -453,4 +292,11 @@ export const chartSvg = (c: Chart, p: Palette, width: number): Card => {
     case 'quadrant':
       return quadrantSvg(c, p, width, alt(c))
   }
+}
+
+// The same for a caller sure of a card (the tests): too small to read throws.
+export const chartSvg = (c: Chart, p: Palette, width: number): Card => {
+  const card = chartCard(c, p, width)
+  if (!card) throw new RangeError('chart too small to read at this width')
+  return card
 }

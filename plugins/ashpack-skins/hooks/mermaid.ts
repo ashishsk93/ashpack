@@ -1,6 +1,6 @@
 import type { Gantt, Quadrant, Timeline } from './mermaid-more'
 import { parseClass, parseEr, parseGantt, parseMindmap, parseQuadrant, parseState, parseTimeline } from './mermaid-more'
-import { clean, linesOf } from './mermaid-text'
+import { clean, frontTitle, linesOf, MAX_ITEMS, MAX_NODES } from './mermaid-text'
 
 // Reads the ```mermaid fences a reply holds into charts the skin can draw: flowcharts,
 // sequence diagrams, pies, and xy charts (bars and lines). Pure: text in, data out. Any
@@ -10,17 +10,17 @@ export type Shape = 'rect' | 'round' | 'pill' | 'diamond' | 'hex' | 'circle'
 export type FlowNode = { id: string; label: string; shape: Shape; body?: string[] } // body: a class's members, an entity's fields
 export type FlowEdge = { from: string; to: string; label: string; line: 'solid' | 'dotted' | 'thick'; head: 'arrow' | 'none' | 'both' | 'start' } // start: the head at `from`
 // `name`: what the drawing is when it is not a flowchart (a state diagram, a mind map...).
-export type Flow = { kind: 'flow'; dir: 'TD' | 'LR' | 'BT' | 'RL'; nodes: FlowNode[]; edges: FlowEdge[]; name?: FlowName }
+export type Flow = { kind: 'flow'; dir: 'TD' | 'LR' | 'BT' | 'RL'; nodes: FlowNode[]; edges: FlowEdge[]; name?: FlowName; title?: string }
 export type FlowName = 'state diagram' | 'mind map' | 'class diagram' | 'ER diagram'
 
 export type Actor = { id: string; name: string }
 export type Step =
   | { kind: 'msg'; from: number; to: number; text: string; isDashed: boolean; isCross: boolean }
-  | { kind: 'note'; from: number; to: number; text: string }
+  | { kind: 'note'; from: number; to: number; text: string; place: 'left' | 'right' | 'over' }
   | { kind: 'open'; keyword: string; label: string }
   | { kind: 'else'; keyword: string; label: string }
   | { kind: 'close' }
-export type Sequence = { kind: 'sequence'; actors: Actor[]; steps: Step[] }
+export type Sequence = { kind: 'sequence'; actors: Actor[]; steps: Step[]; title?: string; autonumber?: { start: number; step: number } }
 
 export type Pie = { kind: 'pie'; title: string; slices: { label: string; value: number }[] }
 
@@ -101,12 +101,14 @@ const readGroup = (s: string): Read<{ id: string; label?: string; shape?: Shape 
   return { value: nodes, rest }
 }
 
-// `-- text -->`, `-. text .->`, `== text ==>`; then the plain ops, `-->|text|`.
-// A head at the start too: `<-->`, `o--o`, `x--x`.
-const TEXT_EDGE = /^\s*(<|[ox](?=[-=]))?(--|==|-\.)\s+(.+?)\s+(-{2,}[xo>]?|={2,}[xo>]?|\.-+[xo>]?)\s*/
+// `-- text -->`, `-. text .->`, `== text ==>`, spaced or not (`A--text-->B`); then the plain
+// ops, `-->|text|`. A head at the start too: `<-->`, `o--o`, `x--x`. The text may not open
+// like another op (`-->`, `---`, `-.->`) or be a `--o `/`--x ` head.
+const TEXT_EDGE = /^\s*(<|[ox](?=[-=]))?(--|==|-\.)(?![->=.]|[ox]\s)\s*(.+?)\s*(-{2,}[xo>]?|={2,}[xo>]?|\.-+[xo>]?)\s*/
 const EDGE = /^\s*(<|[ox](?=[-=.]))?(-{2,}[xo](?=\s)|={2,}[xo](?=\s)|-\.+-[xo>]?|-{2,}>?|={2,}>?|~{3,})\s*(?:\|([^|]*)\|)?\s*/
 
-const readEdge = (s: string): Read<Omit<FlowEdge, 'from' | 'to'>> | null => {
+// `isHidden`: `~~~`, a link Mermaid lays out by but never draws.
+const readEdge = (s: string): Read<Omit<FlowEdge, 'from' | 'to'> & { isHidden: boolean }> | null => {
   const t = TEXT_EDGE.exec(s)
   const m = t ? null : EDGE.exec(s)
   if (!t && !m) return null
@@ -116,8 +118,9 @@ const readEdge = (s: string): Read<Omit<FlowEdge, 'from' | 'to'>> | null => {
   return {
     value: {
       label: clean(t ? (t[3] ?? '') : (m?.[3] ?? '')),
-      line: op.includes('.') || op.startsWith('~') ? 'dotted' : op.includes('=') ? 'thick' : 'solid',
+      line: op.includes('.') ? 'dotted' : op.includes('=') ? 'thick' : 'solid',
       head: hasHead ? (isBack ? 'both' : 'arrow') : 'none',
+      isHidden: op.startsWith('~'),
     },
     rest: s.slice((t ?? m)?.[0].length ?? 0),
   }
@@ -145,6 +148,25 @@ const statements = (line: string): string[] => {
   return [...out, line.slice(start)].map(s => s.trim()).filter(Boolean)
 }
 
+type Seen = { id: string; label?: string; shape?: Shape }
+
+// One statement's nodes and edges, `A & B --> C`; false when it cannot read it whole, or when
+// its `&` groups would multiply past the cap (200 by 200 is 40,000 edges).
+const readStatement = (st: string, see: (n: Seen) => void, edges: FlowEdge[]): boolean => {
+  let group = readGroup(st)
+  if (!group || group.value.length > MAX_NODES) return false
+  group.value.forEach(see)
+  for (let edge = readEdge(group.rest); edge; edge = readEdge(group.rest)) {
+    const next = readGroup(edge.rest)
+    if (!next || edges.length + group.value.length * next.value.length > MAX_ITEMS) return false
+    next.value.forEach(see)
+    const { isHidden, ...link } = edge.value
+    if (!isHidden) for (const a of group.value) for (const b of next.value) edges.push({ from: a.id, to: b.id, ...link })
+    group = next
+  }
+  return group.rest.trim() === ''
+}
+
 export const parseFlow = (src: string): Flow | null => {
   const [head, ...body] = linesOf(src).flatMap(statements)
   const m = /^(?:flowchart|graph)(?:\s+(TD|TB|BT|LR|RL))?\b/i.exec(head ?? '')
@@ -153,26 +175,21 @@ export const parseFlow = (src: string): Flow | null => {
   const dir = raw === 'TB' ? 'TD' : (raw as Flow['dir'])
   const nodes = new Map<string, FlowNode>()
   const edges: FlowEdge[] = []
-  const see = (n: { id: string; label?: string; shape?: Shape }) => {
+  const groups = new Set<string>() // subgraph ids: this draws no boxes, so a link to one would be a bogus node
+  const see = (n: Seen) => {
     const held = nodes.get(n.id)
     if (!held || n.shape) nodes.set(n.id, { id: n.id, label: n.label || held?.label || n.id, shape: n.shape ?? held?.shape ?? 'rect' })
   }
   // A statement it cannot read whole makes the fence code: better than a wrong chart.
   for (const st of body) {
+    const sub = /^subgraph\s+([\p{L}\p{N}_-]+)/u.exec(st)?.[1]
+    if (sub) groups.add(sub)
     if (SKIP.test(st)) continue
-    let group = readGroup(st)
-    if (!group) return null
-    group.value.forEach(see)
-    for (let edge = readEdge(group.rest); edge; edge = readEdge(group.rest)) {
-      const next = readGroup(edge.rest)
-      if (!next) return null
-      next.value.forEach(see)
-      for (const a of group.value) for (const b of next.value) edges.push({ from: a.id, to: b.id, ...edge.value })
-      group = next
-    }
-    if (group.rest.trim() !== '') return null
+    if (!readStatement(st, see, edges) || nodes.size > MAX_NODES) return null
   }
-  return nodes.size > 0 ? { kind: 'flow', dir, nodes: [...nodes.values()], edges } : null
+  if ([...nodes.keys()].some(id => groups.has(id))) return null
+  const title = frontTitle(src)
+  return nodes.size > 0 ? { kind: 'flow', dir, nodes: [...nodes.values()], edges, ...(title ? { title } : {}) } : null
 }
 
 // ── sequence diagram ──
@@ -184,12 +201,13 @@ const NOTE = /^note\s+(left of|right of|over)\s+([^:]+?)\s*:\s*(.*)$/i
 const OPEN = /^(loop|alt|opt|par|critical|break)\b\s*(.*)$/
 const ELSE = /^(else|and|option)\b\s*(.*)$/
 const ACTOR = /^(?:create\s+)?(participant|actor)\s+(.+?)(?:\s+as\s+(.+))?$/
+const AUTONUMBER = /^autonumber(?:\s+(\d+))?(?:\s+(\d+))?$/
 
 export const parseSequence = (src: string): Sequence | null => {
   const [head, ...body] = linesOf(src)
   if (!/^sequenceDiagram\b/.test(head ?? '')) return null
-  const actors: Actor[] = []
-  const steps: Step[] = []
+  const chart: Sequence = { kind: 'sequence', actors: [], steps: [] }
+  const { actors, steps } = chart
   const blocks: string[] = [] // what each open `end` closes: a drawn group, or a box/rect we skip
   const at = (id: string): number => {
     const key = id.trim()
@@ -204,13 +222,19 @@ export const parseSequence = (src: string): Sequence | null => {
     const note = NOTE.exec(line)
     const open = OPEN.exec(line)
     const other = ELSE.exec(line)
+    const auto = AUTONUMBER.exec(line)
+    const title = /^title(?:\s*:\s*|\s+)(.*)$/.exec(line)
     if (actor?.[2]) {
       const i = at(actor[2])
       actors[i] = { id: actors[i]?.id ?? actor[2], name: clean(actor[3] ?? actor[2]) }
-    } else if (note?.[2]) {
+    } else if (note?.[1] && note[2]) {
       const [a = '', b = a] = note[2].split(',')
-      steps.push({ kind: 'note', from: at(a), to: at(b), text: clean(note[3] ?? '') })
-    } else if (/^(box|rect)\b/.test(line)) blocks.push('skip')
+      const place = note[1].toLowerCase() === 'left of' ? 'left' : note[1].toLowerCase() === 'right of' ? 'right' : 'over'
+      steps.push({ kind: 'note', from: at(a), to: at(b), text: clean(note[3] ?? ''), place })
+    } else if (auto) chart.autonumber = { start: Number(auto[1] ?? 1), step: Number(auto[2] ?? 1) }
+    else if (line === 'autonumber off') return null // numbers on only some messages: code, not wrong numbers
+    else if (title && !msg) chart.title = clean(title[1] ?? '')
+    else if (/^(box|rect)\b/.test(line)) blocks.push('skip')
     else if (line === 'end') {
       if (blocks.pop() === 'group') steps.push({ kind: 'close' })
     } else if (open?.[1]) {
@@ -222,7 +246,9 @@ export const parseSequence = (src: string): Sequence | null => {
     }
   }
   while (blocks.length > 0) if (blocks.pop() === 'group') steps.push({ kind: 'close' })
-  return actors.length > 0 ? { kind: 'sequence', actors, steps } : null
+  const title = chart.title ?? frontTitle(src)
+  const fits = actors.length > 0 && actors.length <= MAX_NODES && steps.length <= MAX_ITEMS
+  return fits ? { ...chart, ...(title ? { title } : {}) } : null
 }
 
 // ── pie ──
@@ -231,7 +257,7 @@ export const parsePie = (src: string): Pie | null => {
   const [head, ...body] = linesOf(src)
   const m = /^pie\b(?:\s+showData)?(?:\s+title\s+(.*))?$/.exec(head ?? '')
   if (!m) return null
-  let title = clean(m[1] ?? '')
+  let title = clean(m[1] ?? '') || frontTitle(src)
   const slices: Pie['slices'] = []
   // `1,200` and `5%` read as numbers; a line it cannot read makes the fence code.
   for (const line of body) {
@@ -243,7 +269,7 @@ export const parsePie = (src: string): Pie | null => {
     else if (!s?.[1] || !Number.isFinite(value) || value < 0) return null
     else if (value > 0) slices.push({ label: clean(s[1]), value })
   }
-  return slices.length > 0 ? { kind: 'pie', title, slices } : null
+  return slices.length > 0 && slices.length <= MAX_ITEMS ? { kind: 'pie', title, slices } : null
 }
 
 // ── xy chart ──
@@ -252,17 +278,26 @@ export const parsePie = (src: string): Pie | null => {
 const list = (s: string): string[] =>
   [...s.replace(/^\[|\]$/g, '').matchAll(/\s*(?:"([^"]*)"|'([^']*)'|([^,]+))/g)].map(m => (m[1] ?? m[2] ?? m[3] ?? '').trim()).filter(Boolean)
 
+// `x-axis "t" 0 --> 10`: the points spread across the range, each labelled by where it falls.
+const rangeLabels = (lo: number, hi: number, n: number): string[] =>
+  Array.from({ length: n }, (_, i) => String(Number((lo + (n > 1 ? ((hi - lo) * i) / (n - 1) : 0)).toFixed(2))))
+
 export const parseXY = (src: string): XY | null => {
   const [head, ...body] = linesOf(src)
-  if (!/^xychart(-beta)?\b/.test(head ?? '')) return null
-  const chart: XY = { kind: 'xy', title: '', xLabels: [], yTitle: '', series: [] }
+  const m = /^xychart(-beta)?\b(?:\s+(horizontal|vertical))?/.exec(head ?? '')
+  // Horizontal bars this does not draw: code, rather than bars turned the wrong way.
+  if (!m || m[2] === 'horizontal') return null
+  const chart: XY = { kind: 'xy', title: frontTitle(src), xLabels: [], yTitle: '', series: [] }
+  let range: [number, number] | null = null
   for (const line of body) {
     const title = /^title\s+(.*)$/.exec(line)
     const x = /^x-axis\s*(?:("[^"]*"|\S+(?=\s*\[)))?\s*(\[.*\])/.exec(line)
+    const xRange = /^x-axis\s*(?:"[^"]*"|[^\d\s"-]\S*)?\s*(-?[\d.]+)\s*-->\s*(-?[\d.]+)$/.exec(line)
     const y = /^y-axis\s*(?:"([^"]*)"|([^\d\s"-][^\s]*))?\s*(?:(-?[\d.]+)\s*-->\s*(-?[\d.]+))?/.exec(line)
     const series = /^(bar|line)\s*(?:"([^"]*)")?\s*(\[.*\])/.exec(line)
     if (title) chart.title = clean(title[1] ?? '')
     else if (x?.[2]) chart.xLabels = list(x[2])
+    else if (xRange) range = [Number(xRange[1]), Number(xRange[2])]
     else if (y) {
       chart.yTitle = clean(y[1] ?? y[2] ?? '')
       if (y[3] !== undefined && y[4] !== undefined) {
@@ -277,7 +312,8 @@ export const parseXY = (src: string): XY | null => {
     }
   }
   const n = Math.max(0, ...chart.series.map(s => s.values.length))
-  if (n === 0) return null
+  if (n === 0 || chart.series.reduce((a, s) => a + s.values.length, 0) > MAX_ITEMS) return null
+  if (range && range.every(Number.isFinite)) chart.xLabels = rangeLabels(range[0], range[1], n)
   // Categories the axis lacks are numbered.
   chart.xLabels = Array.from({ length: n }, (_, i) => chart.xLabels[i] ?? String(i + 1))
   return chart

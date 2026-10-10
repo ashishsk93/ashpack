@@ -40,8 +40,8 @@ A ` ```mermaid ` fence in a reply draws as a chart once the fence closes. Eleven
 
 | Kind | Mermaid | Desktop app | Terminal |
 | --- | --- | --- | --- |
-| Flowchart | `flowchart` or `graph`, `TD` `LR` `BT` `RL`; shapes, edge labels, dotted and thick edges, `A & B` | Boxes, diamonds and pills in layers, curved arrows; a chart too wide across is turned down the page | Each step, then `├─ yes ─▶` the steps it leads to |
-| Sequence | `sequenceDiagram`: participants, actors, messages, notes, `loop` `alt` `opt` `par` `critical` `break` | Lifelines, arrows, notes and framed groups | The same in cells; one line per message when there are too many actors for the width |
+| Flowchart | `flowchart` or `graph`, `TD` `LR` `BT` `RL`; shapes, edge labels, dotted and thick edges, `A & B`, `~~~`; subgraphs are not boxed | Boxes, diamonds and pills in layers, curved arrows; a chart too wide one way is turned the other when that draws it larger | Each step, then `├─ yes ─▶` the steps it leads to |
+| Sequence | `sequenceDiagram`: participants, actors, messages, notes, `autonumber`, `title`, `loop` `alt` `opt` `par` `critical` `break` | Lifelines, arrows, notes and framed groups | The same in cells; one line per message when there are too many actors for the width |
 | Pie | `pie`, with a title | A donut with a legend of shares and values | A stacked bar and a legend |
 | Bar and line | `xychart-beta`: `x-axis`, `y-axis`, `bar`, `line` | Bars and lines on a grid, values on the bars | A bar per category; a line as a sparkline |
 | State | `stateDiagram-v2`: transitions with labels, `[*]`, `state "x" as y`, `<<choice>>` | Laid out like a flowchart, `start` and `end` as pills | Each state and where it goes |
@@ -49,10 +49,10 @@ A ` ```mermaid ` fence in a reply draws as a chart once the fence closes. Eleven
 | Class | `classDiagram`: classes with members, `<\|--`, `*--`, `o--`, `-->`, `..>` | Boxes with their members under a rule, arrows for inheritance and use | Each class, its members, what it points to |
 | ER | `erDiagram`: entities with fields, `\|\|--o{` and the rest | Boxes with fields, each link labelled `places (one to many)` | Each entity, its fields, its links |
 | Timeline | `timeline`, with sections | A line across with a dot per period, its events under it | A period per row, its events after it |
-| Gantt | `gantt` with `YYYY-MM-DD` dates, `after`, `3d`/`2w`, `done` `active` `crit` `milestone` | Bars on a calendar, critical ones red, milestones as diamonds | A bar per task across the days |
+| Gantt | `gantt` with `YYYY-MM-DD` dates, `after`, `3d`/`2w`, `excludes weekends`, `done` `active` `crit` `milestone` | Bars on a calendar, critical ones red, milestones as diamonds | A bar per task across the days |
 | Quadrant | `quadrantChart`: axes, four quadrant names, points | A square split four ways, each point placed and named | The same grid in cells, points numbered |
 
-Other Mermaid kinds (journey, gitGraph, sankey and the rest) stay code, and so does any fence a reader cannot read whole: a wrong chart is worse than the source. While a skin is on and charts are on, Claude gets a short note (76 words, after the prompt cache's boundary) that these fences draw here, so it reaches for one when a picture reads better. A headless run (`claude -p`) gets no note. **Charts on / Charts off** on the Skins page, or `/skin charts on` and `/skin charts off`, turns both the drawing and the note on or off.
+Other Mermaid kinds (journey, gitGraph, sankey and the rest) stay code, and so does any fence a reader cannot read whole: a wrong chart is worse than the source. So does one too big to read: past 200 nodes or 400 edges, messages, slices or points, or drawn at under about a third of its size. While a skin is on and charts are on, Claude gets a short note (90 words, after the prompt cache's boundary) that these fences draw here, so it reaches for one when a picture reads better. A headless run (`claude -p`) gets no note. **Charts on / Charts off** on the Skins page, or `/skin charts on` and `/skin charts off`, turns both the drawing and the note on or off.
 
 ## Picking a skin
 

@@ -8,7 +8,7 @@ import { ALERT_TITLE, alertColor, fenceOf, isUrl, SHELLS, taskRun } from './repl
 import type { Card, Table } from './cards'
 import { cardWidth, codeSvg, columnWidths, diffFence, diffOf, diffSvg, newSide, roleColor, shellOf, shellText, tableOf, tableSvg, terminalSvg, tokens } from './cards'
 import { chartRows, chartTitle } from './chart-cells'
-import { chartSvg } from './charts'
+import { chartCard } from './charts'
 import type { Chart } from './mermaid'
 import { parseChart } from './mermaid'
 import { toolIcon } from './icons'
@@ -62,7 +62,7 @@ const CHARTS_NOTE = {
   scope: 'session',
   text:
     'Charts: this session draws ```mermaid fenced blocks as pictures. It draws flowchart (or graph) TD and LR, sequenceDiagram, stateDiagram-v2, classDiagram, erDiagram, mindmap, pie, xychart-beta with bar and line series, timeline, gantt with YYYY-MM-DD dates, and quadrantChart. ' +
-    'Use one when a flow, an exchange between parts, a share of a whole or a trend reads better as a picture than as prose or a table; otherwise write as usual. Other Mermaid diagram types show as plain code.',
+    'Use one when a flow, an exchange between parts, a share of a whole or a trend reads better as a picture than as prose or a table; otherwise write as usual. Keep flowcharts to about a dozen nodes with short labels, and prefer no subgraphs. Other Mermaid diagram types show as plain code.',
 } as const
 const EDITS = new Set(['Edit', 'Write', 'MultiEdit'])
 const SHELL_TOOLS = new Set(['Bash', 'PowerShell'])
@@ -377,7 +377,9 @@ function chartTree($: EngineInterface, e: RenderInput<'AssistantMessage'>, p: Pa
     const chart = parseChart(code)
     if (!chart) return null
     if (e.surface === 'terminal') return chartBox($, e, p, chart, code, key)
-    return cardTree($, e, chartSvg(chart, p, width), code, key)
+    // No card when it would draw too small to read: the fence stays code.
+    const card = chartCard(chart, p, width)
+    return card ? cardTree($, e, card, code, key) : null
   } catch (err) {
     $.ui.log(`ashpack-skins: chart: ${String(err)}`, { to: 'debug' })
     return null
