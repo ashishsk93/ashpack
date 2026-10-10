@@ -545,7 +545,7 @@ export const callRowOf = (call: Call, c: Colors, tag?: TextSpan): Row => ({
 })
 
 // The popup's line: the latest call still running (main's or a subagent's), else thinking.
-export const lineOf = (a: Activity | null): string => a?.steps.at(-1)?.label ?? 'Thinking'
+export const lineOf = (a: Activity | null): string => a?.steps?.at(-1)?.label ?? 'Thinking'
 
 type Card = { id: CallKind | 'tasks'; label: string; hotkey: string }
 

@@ -17,9 +17,10 @@ export const NO_HISTORY: History = { turns: [], totals: NO_TOTALS }
 
 // A call starts: its line heads the popup, and a call of the main thread joins the turn's
 // list (the latest MAX_CALLS); a subagent's call is a line alone.
+// `steps` may be missing on a turn that began under 0.13 before a plugin reload.
 export const startCall = (a: Activity, id: string, label: string, call: Pick<Call, 'kind' | 'target'> | null): Activity => ({
   ...a,
-  steps: [...a.steps, { id, label }],
+  steps: [...(a.steps ?? []), { id, label }],
   calls: call ? [...a.calls, { id, kind: call.kind, target: call.target, state: 'running' as const }].slice(-MAX_CALLS) : a.calls,
 })
 
@@ -27,7 +28,7 @@ export const startCall = (a: Activity, id: string, label: string, call: Pick<Cal
 // and its row says how it went, how long it took, an edit's size.
 export const settleCall = (a: Activity, id: string, end: { isFailed: boolean; ms: number; size?: { added: number; removed: number } }): Activity => ({
   ...a,
-  steps: a.steps.filter(s => s.id !== id),
+  steps: (a.steps ?? []).filter(s => s.id !== id),
   calls: a.calls.map(x => (x.id === id ? { ...x, state: end.isFailed ? ('failed' as const) : ('ok' as const), ms: end.ms, ...end.size } : x)),
 })
 
