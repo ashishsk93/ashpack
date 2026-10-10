@@ -1,6 +1,6 @@
 {
   "name": "ashpack-skins",
-  "version": "0.8.1",
+  "version": "0.9.0",
   "description": "Skins: prompts, replies, tool rows, charts, spinner and turn footer redrawn in sixteen palettes, dark or light. Pick one on the Skins page of the AshPack drawer, or with /skin.",
   "author": {
     "name": "Ashish S Kumar"

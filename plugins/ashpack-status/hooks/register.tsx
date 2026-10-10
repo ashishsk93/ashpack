@@ -244,7 +244,6 @@ let seconds: Timer | undefined // the terminal Activity page's running time
 let terminalSeen = false // a terminal has drawn: the wave has a reader
 // The history's turn count, kept here so a turn's start reads no history; read once after a
 // load (a hot reload keeps the history, not this).
-let turnCount: number | undefined
 
 // A timer that bumps a counter, which draws again whatever reads it. The timer is the
 // counter's only writer, so it writes straight, no read first.
@@ -280,7 +279,7 @@ async function recordTurn($: EngineInterface, e: { durationMs: number; reason: T
   const usage = await $.session.usage().catch(() => null)
   const costUsd = a.costAtStart !== undefined && usage?.cost ? usage.cost.usd - a.costAtStart : undefined
   const turn = turnOf(a, { ms: e.durationMs, outcome: e.reason, ...(costUsd !== undefined ? { costUsd } : {}), ...(e.usage ? { usage: e.usage } : {}) })
-  turnCount = (await update($, history, h => withTurn(h, turn))).totals.turns
+  await update($, history, h => withTurn(h, turn))
 }
 
 // A /clear or a resume starts the Activity page over: the process goes on as another
@@ -288,7 +287,6 @@ async function recordTurn($: EngineInterface, e: { durationMs: number; reason: T
 async function clearHistory($: EngineInterface): Promise<void> {
   await resetActivity($)
   await Promise.all([update($, history, () => NO_HISTORY), update($, shownTurn, () => null), showCalls($, 'all')])
-  turnCount = 0
 }
 
 // The running section's loader: redrawn per frame on the terminal; an SVG that
@@ -359,7 +357,8 @@ async function drawPopup($: EngineInterface, e: RenderInput<'AbovePrompt'>) {
 async function activityInputs($: EngineInterface, e: PaneInput): Promise<ActivityView> {
   const [held, h, picked, filter, limit, data, c, now] = await Promise.all([read($, activity), read($, history), read($, shownTurn), read($, callFilter), read($, callLimit), read($, status), colorsOf($), $.clock.now()])
   const v = activityView({ held, history: h, picked, filter, limit, data, c, now })
-  const isTicking = e.surface === 'terminal' && v.shown?.isLive === true
+  if (e.surface !== 'terminal') return v // only a terminal's drawing starts or stops the terminal's tick
+  const isTicking = v.shown?.isLive === true
   tickSeconds($, isTicking)
   if (isTicking) await read($, second)
   return v
@@ -498,7 +497,7 @@ async function activityTab($: EngineInterface, e: PaneInput) {
   const page: unknown = (await $.state.get(HOST_PAGE as never).catch(() => undefined))?.value
   // The drawer pads its pages by a cell each side.
   if (page === 'activity') return activityPage($, e, e.props.bodyColumns - 2)
-  tickSeconds($, false)
+  if (e.surface === 'terminal') tickSeconds($, false)
   const { Box } = $.ui.resolve(e)
   return <Box key="ashpack-page:Activity" />
 }
@@ -642,9 +641,9 @@ export const register: Register = on => {
   on('turn.start', async ($, e, next) => {
     // The session's cost now, so the turn's own is the difference when it ends.
     const [now, usage, pick, list] = await Promise.all([$.clock.now(), $.session.usage().catch(() => null), read($, shownTurn), read($, plan)])
-    turnCount ??= (await read($, history)).totals.turns
+    const turns = (await read($, history)).totals.turns
     const cost = usage?.cost ? { costAtStart: usage.cost.usd } : {}
-    await update($, activity, () => ({ n: (turnCount ?? 0) + 1, prompt: ellipsis(oneLine(String(e.text ?? '')), PROMPT_CHARS), startedAt: now, steps: [], calls: [], ...cost }))
+    await update($, activity, () => ({ n: turns + 1, prompt: ellipsis(oneLine(String(e.text ?? '')), PROMPT_CHARS), startedAt: now, steps: [], calls: [], ...cost }))
     // Following the work, the new turn's calls show whole, not under the last turn's filter.
     if (pick === null) await showCalls($, 'all')
     // A finished task list is the last turn's; a new one starts empty.
@@ -787,8 +786,8 @@ export const register: Register = on => {
     return (
       <Box flexDirection="column" paddingX={e.requestId === PANE ? 1 : 0}>
         {below}
-        {e.requestId === DRAWER ? await activityTab($, e) : null}
         {statusPage($, e, isCompactOn, isStatusOn, order, hidden)}
+        {e.requestId === DRAWER ? await activityTab($, e) : null}
       </Box>
     )
   })

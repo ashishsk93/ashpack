@@ -667,6 +667,7 @@ test('control characters never reach a card: escapes, links, progress output', (
   expect(card.source).toContain('>100%<')
   expect(card.source).not.toContain('50%')
   expect(codeSvg('', 'a\u001b[1mb\u0000', p, 720).alt).toBe('ab') // every card's alt
+  expect(codeSvg('ts', 'let a = 1\r\nlet b = 2\r\n', p, 720).alt).not.toContain('\r') // a CRLF file's lines
 })
 
 test('markdown: marks nest, fences take info and longer runs, items and quotes go on', () => {

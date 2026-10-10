@@ -19,7 +19,7 @@ One row:
 | `ctx` `session` `week` | context used, and the usage windows, with `↻` time to reset |
 | `app · $1.24 · 23m` | folder, session cost, session time |
 
-Bars are green below 60%, amber below 85%, red from 85%. The chips refresh on a timer, on each prompt and turn, and when the model changes; a burst of these (a turn's end raises several) runs one refresh, and git runs only while a chip that shows the repo is on.
+Bars are green below 60%, amber below 85%, red from 85%. The chips refresh on a timer, on each prompt and turn, and when the model changes; a burst of these (a turn's end raises several) runs one refresh at a time, plus one more for what changed meanwhile, and git runs only while a chip that shows the repo is on.
 
 ### Repo chips (off until you turn them on)
 

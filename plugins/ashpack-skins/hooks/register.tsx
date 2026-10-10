@@ -668,8 +668,8 @@ export const register: Register = on => {
   })
 
   // Times each call a skin draws a row for, and keeps a shell call's command for its terminal
-  // card: one write once it ends, interrupted or not. None while only the terminal draws,
-  // which shows neither.
+  // card: one write once it ends (a call the engine abandons mid-way may lose both). None
+  // while only the terminal draws, which shows neither.
   on('tool.call', async ($, e, next) => {
     if (!kindOf(e.tool) || !(await $.session.surfaces()).some(s => s !== 'terminal')) return next(e)
     const { command } = e as { command?: unknown }

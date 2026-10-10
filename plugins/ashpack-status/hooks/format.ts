@@ -34,7 +34,9 @@ export const ellipsis = (s: string, max: number): string => {
   return head.length <= max && s.length <= max * 2 ? s : `${head.slice(0, max - 1).join('')}…`
 }
 
-export const oneLine = (s: string): string => s.replace(/\s+/g, ' ').trim()
+// One line of plain text: whitespace and control characters (a pasted escape code, a BEL) as
+// one space, since the desktop app refuses a label or an alt that holds a control character.
+export const oneLine = (s: string): string => s.replace(/[\s\u0000-\u001f\u007f-\u009f]+/g, ' ').trim()
 
 // "claude-opus-5-5[1m]" -> "Opus 5.5 1M"; "opus[1m]" -> "Opus 1M"
 export const prettyModel = (id: string): string => {
@@ -466,7 +468,7 @@ export const callOf = (tool: string, input: unknown, cwd: string): ToolLine => {
   const str: Field = k => (typeof i[k] === 'string' ? (i[k] as string) : '')
   const name = tool.replace(/^mcp__/, '').replace(/__/g, ' ')
   const line = (Object.hasOwn(TOOLS, tool) ? TOOLS[tool] : undefined)?.(str, cwd) ?? { kind: 'tool', label: `Using ${name}`, target: name }
-  return { ...line, target: ellipsis(line.target, TARGET_CHARS) }
+  return { ...line, label: oneLine(line.label), target: ellipsis(oneLine(line.target), TARGET_CHARS) }
 }
 
 // Whether a tool's calls are listed (on a card, on the Activity page): all but the task list's.

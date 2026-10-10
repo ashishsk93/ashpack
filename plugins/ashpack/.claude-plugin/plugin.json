@@ -1,6 +1,6 @@
 {
   "name": "ashpack",
-  "version": "0.9.5",
+  "version": "0.9.6",
   "description": "AshPack: one drawer with a page per mod and one strip with a chip per mod, so your mods stop fighting for the footer and the band. Host for ashpack-status, ashpack-skins and others.",
   "author": {
     "name": "Ashish S Kumar"

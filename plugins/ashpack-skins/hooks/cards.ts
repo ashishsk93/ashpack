@@ -223,7 +223,7 @@ export const panel = (p: Palette, width: number, title: string, mark: [string, s
     `<g transform="translate(0 ${HEAD})">${body}</g>` +
     `<rect x=".5" y=".5" width="${width - 1}" height="${height - 1}" rx="10" fill="none" stroke="${p.muted}" stroke-opacity=".45"/>` +
     `</svg>`
-  return { source, width, height, alt: clean(alt) }
+  return { source, width, height, alt: clean(alt).replace(/\r/g, '') } // a CRLF file's lines too
 }
 
 // A card of text rows, LINE apart.

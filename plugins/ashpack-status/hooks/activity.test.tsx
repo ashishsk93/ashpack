@@ -1,5 +1,6 @@
 import { expect, mock, test } from 'claude-code/testing'
 import type { On } from 'claude-code'
+import type { Plugin } from 'claude-code/testing'
 
 import type { Activity, Call, History, Turn } from '../types'
 import { activityView, callsSvg, chartSvg, heroSvg, MAX_CALLS, NO_HISTORY, sessionTiles, settleCall, shownOf, startCall, tilesSvg, withTurn } from './activity'
@@ -165,6 +166,52 @@ test('the Activity page lists the latest 12 calls, Show more adds 12, and a filt
   await term.unmount()
   await desk.unmount()
   await clock.advance(0)
+})
+
+// Stands in for the person closing the drawer (Esc reaches the mods the same way).
+const closer: Plugin = {
+  name: 'closer',
+  register(on) {
+    on('command.run', { command: 'close-drawer' }, async $ => {
+      await $.ui.close({ id: 'ashpack' })
+      return {}
+    })
+  },
+}
+
+test('no control character reaches a label or an alt; the terminal ticks the running turn each second until closed', { plugins: [closer] }, async ($, on) => {
+  mock.store(on)
+  const clock = mock.clock(on, { now: T0 })
+  let ticks = 0
+  on('state.set', ($, e, next) => ((e as { key?: string }).key === 'second' && ticks++, next(e)))
+  on('ui.close', () => ({ value: undefined }))
+  session(on)
+  // A pasted escape code in the prompt, a BEL in a pattern.
+  await $.turn.start({ text: 'why \u001b[31mred\u001b[0m\u0007', turnId: 't1' } as never)
+  await $.tool.call({ tool: 'Grep', pattern: 'a\u0007b', tool_use_id: 'g1' } as never)
+  await $.turn.complete({ ...END, turnId: 't1' } as never)
+  await $.turn.start({ text: 'two', turnId: 't2' } as never)
+  const desk = await $.ui.mount({ plugin: 'ashpack-status', surface: 'desktop', ...DRAWER, props: PANE_PROPS })
+  await desk.press({ key: 'turn-1' })
+  const CONTROL = /[\u0000-\u0008\u000b-\u001f\u007f-\u009f]/
+  const svgs = await desk.findAll({ type: 'Svg' })
+  expect(svgs.length).toBeGreaterThan(0)
+  for (const x of svgs) expect(String(x.props.alt)).not.toMatch(CONTROL)
+  for (const x of await desk.findAll({ type: 'Button' })) expect(String(x.props.label)).not.toMatch(CONTROL)
+  await desk.press({ key: 'activity-now' })
+  await desk.unmount()
+
+  // The terminal: the running turn's time moves each second while the page shows it.
+  const term = await $.ui.mount({ plugin: 'ashpack-status', surface: 'terminal', ...DRAWER, props: PANE_PROPS })
+  await clock.advance(3000)
+  expect(ticks).toBeGreaterThan(0)
+  expect(flatten(await term.drawn())).toContain('3s')
+  // Closed, it stops.
+  await $.command.run({ command: 'close-drawer', args: '' } as never)
+  const stopped = ticks
+  await clock.advance(5000)
+  expect(ticks).toBe(stopped)
+  await term.unmount()
 })
 
 test('a fault in the Activity page costs the drawer nothing', async ($, on) => {

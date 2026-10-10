@@ -50,7 +50,11 @@ export const turnOf = (a: Activity, end: { ms: number; outcome: Turn['outcome'];
 
 const edited = (calls: readonly Call[]): string[] => calls.filter(c => c.kind === 'edit' && c.state === 'ok' && c.target).map(c => c.target)
 
-export const withTurn = (h: History, turn: Turn): History => ({ turns: [...h.turns, turn].slice(-MAX_TURNS), totals: addTurn(h.totals, turn) })
+// Totals saved before 0.14 have no `since`: they count from the first turn still kept.
+export const withTurn = (h: History, turn: Turn): History => ({
+  turns: [...h.turns, turn].slice(-MAX_TURNS),
+  totals: addTurn({ ...h.totals, since: h.totals.since ?? h.turns[0]?.startedAt }, turn),
+})
 
 export const addTurn = (t: Totals, turn: Turn): Totals => ({
   since: t.since ?? turn.startedAt,

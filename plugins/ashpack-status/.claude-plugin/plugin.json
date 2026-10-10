@@ -1,6 +1,6 @@
 {
   "name": "ashpack-status",
-  "version": "0.13.0",
+  "version": "0.14.0",
   "description": "Status chips (model, branch, context, usage) by the prompt, compact mode with a working popup, and an Activity page of every turn's tool calls. Pages of the AshPack drawer.",
   "author": {
     "name": "Ashish S Kumar"

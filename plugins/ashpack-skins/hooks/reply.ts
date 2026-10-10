@@ -5,10 +5,19 @@ import type { Palette } from './skins'
 
 // Pure pieces of a skinned reply's drawing, kept apart from the hooks.
 
-// A Link needs a URL its surface opens: the terminal these schemes, the others https alone.
-// Anything else stays text, underlined.
+// A Link needs a URL its surface opens: the terminal these schemes, the others https alone,
+// at most 2048 characters once percent-encoded (a longer one refuses the reply). Anything
+// else stays text, underlined.
 export const isUrl = (href: string, surface: RenderSurface): boolean =>
-  href.length <= 2048 && (surface === 'terminal' ? /^(https?|mailto|file):/i : /^https:/i).test(href)
+  encodedLength(href) <= 2048 && (surface === 'terminal' ? /^(https?|mailto|file):/i : /^https:/i).test(href)
+
+const encodedLength = (href: string): number => {
+  try {
+    return encodeURI(href).length
+  } catch {
+    return Infinity // a lone surrogate cannot be encoded
+  }
+}
 
 // Shell fences stay the desktop app's own block, which carries its Run button.
 export const SHELLS = new Set(['bash', 'sh', 'zsh', 'fish', 'shell', 'console', 'shellsession', 'powershell', 'ps1', 'pwsh', 'cmd', 'bat'])
