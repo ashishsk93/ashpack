@@ -19,7 +19,7 @@ One row:
 | `ctx` `session` `week` | context used, and the usage windows, with `↻` time to reset |
 | `app · $1.24 · 23m` | folder, session cost, session time |
 
-Bars are green below 60%, amber below 85%, red from 85%. The chips refresh on a timer, on each prompt and turn, and when the model changes.
+Bars are green below 60%, amber below 85%, red from 85%. The chips refresh on a timer, on each prompt and turn, and when the model changes. In the desktop app they hold still while Claude works and catch up when the turn ends: each redraw there puts the app's own spinner back over the skin's.
 
 Where they sit: under the prompt in a fullscreen terminal; above it elsewhere, in the AshPack strip (a row of their own without the host). The desktop app draws the bars as images, so the segments line up whatever its font does, and leaves out the model chip, since its own footer names the model. With a skin on, the model chip takes the skin's accent.
 

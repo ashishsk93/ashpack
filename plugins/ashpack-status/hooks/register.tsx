@@ -82,6 +82,9 @@ async function seenFromSettings($: EngineInterface): Promise<Seen> {
 }
 
 async function loadStatus($: EngineInterface): Promise<void> {
+  // While a turn runs on the desktop app, no write: each one redraws the band, and the app
+  // then puts its own spinner back over the skin's until the next step. turn.complete refreshes.
+  if (!terminalSeen && (await read($, activity)) !== null) return
   const [model, usage, git, cwd] = await Promise.all([$.session.model(), $.session.usage(), gitInfo($), $.session.cwd()])
   const data: StatusData = {
     model,
@@ -373,8 +376,9 @@ export const register: Register = on => {
 
   // ── compact mode: what the popup says, and the task list it splits into sections ──
   on('tool.call', async ($, e, next) => {
-    // Outside a turn (a plugin's own background call) there is nothing to show: no write.
-    if ((await read($, activity)) === null) return next(e)
+    // Only the model's own calls are steps. A plugin's call (Baton lists the sessions every
+    // 20 s) is not, and outside a turn there is nothing to show: no write for either.
+    if (next.origin.plugin !== 'engine' || (await read($, activity)) === null) return next(e)
     const label = describeTool(String(e.tool), e)
     await update($, activity, a => a && { ...a, label, steps: a.steps + 1 })
     const isMain = !e.agentId // a subagent's list is its own
