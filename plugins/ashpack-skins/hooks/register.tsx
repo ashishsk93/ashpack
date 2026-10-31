@@ -56,14 +56,12 @@ const sharedAccent = atom({ plugin: 'ashpack-skins', key: 'accent' } as const, '
 const sharedPalette = atom({ plugin: 'ashpack-skins', key: 'palette' } as const, null as SharedPalette | null) // read by ashpack-status
 const chartsOn = atom({ plugin: 'ashpack-skins', key: 'charts' } as const, true)
 
-// What Claude is told while charts draw: model-only, added after the cache boundary.
-const CHARTS_NOTE = {
-  id: 'ashpack-skins:charts',
-  scope: 'session',
-  text:
-    'Charts: this session draws ```mermaid fenced blocks as pictures. It draws flowchart (or graph) TD and LR, sequenceDiagram, stateDiagram-v2, classDiagram, erDiagram, mindmap, pie, xychart-beta with bar and line series, timeline, gantt with YYYY-MM-DD dates, and quadrantChart. ' +
-    'Use one when a flow, an exchange between parts, a share of a whole or a trend reads better as a picture than as prose or a table; otherwise write as usual. Keep flowcharts to about a dozen nodes with short labels, and prefer no subgraphs. Other Mermaid diagram types show as plain code.',
-} as const
+// What Claude is told while charts draw: context beside the first prompt, never shown.
+const CHARTS_NOTE =
+  'Charts: this session draws ```mermaid fenced blocks as pictures. It draws flowchart (or graph) TD and LR, sequenceDiagram, stateDiagram-v2, classDiagram, erDiagram, mindmap, pie, xychart-beta with bar and line series, timeline, gantt with YYYY-MM-DD dates, and quadrantChart. ' +
+  'Use one when a flow, an exchange between parts, a share of a whole or a trend reads better as a picture than as prose or a table; otherwise write as usual. Keep flowcharts to about a dozen nodes with short labels, and prefer no subgraphs. Other Mermaid diagram types show as plain code.'
+// Whether this conversation's Claude has had the note; a reload sends it again.
+let chartsNoted = false
 const EDITS = new Set(['Edit', 'Write', 'MultiEdit'])
 const SHELL_TOOLS = new Set(['Bash', 'PowerShell'])
 
@@ -580,17 +578,24 @@ export const register: Register = on => {
     return next(e)
   })
 
-  // /clear, /resume and /branch reset $.state to its defaults and skip session.start.
-  on('classic.SessionStart', { source: ['clear', 'resume', 'fork'] }, async ($, e, next) => {
-    await load($)
+  // Not classic.SessionStart or prompt.compose: a Team org's built-in cc-plugin-sec-default runs
+  // first and sends both past every installed plugin.
+  // /clear and /resume reset $.state to its defaults and skip session.start; load once the reset is done.
+  on('session.end', ($, e, next) => {
+    if (e.reason === 'clear' || e.reason === 'resume') {
+      chartsNoted = false
+      $.clock.after(0, () => void load($).catch(err => $.ui.log(`ashpack-skins: ${String(err)}`, { to: 'debug' })))
+    }
     return next(e)
   }).catch(($, e, next) => next(e))
 
-  // While a skin draws charts, Claude hears that ```mermaid fences draw (never headless, with nothing to draw on).
-  on('prompt.compose', async ($, e, next) => {
-    const composed = await next(e)
-    if (e.surfaces.length === 0 || !(await read($, chartsOn)) || !(await active($))) return composed
-    return { sections: [...composed.sections.filter(s => s.id !== CHARTS_NOTE.id), CHARTS_NOTE] }
+  // While a skin draws charts, Claude hears once per conversation that ```mermaid fences draw
+  // (never headless, with nothing to draw on).
+  on('prompt.submit', async ($, e, next) => {
+    if (chartsNoted || e.command || e.isMeta || !(await read($, chartsOn)) || !(await active($))) return next(e)
+    if ((await $.session.surfaces()).length === 0) return next(e)
+    chartsNoted = true
+    return next({ ...e, context: [...(e.context ?? []), CHARTS_NOTE] })
   }).catch(($, e, next) => next(e))
 
   on('config.set', async ($, e, next) => {

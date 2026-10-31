@@ -65,12 +65,9 @@ const callLimit = atom({ plugin: 'ashpack-status', key: 'callLimit' } as const, 
 
 // ── status rows: data ────────────────────────────────────────────────────────
 
-// Effort arrives only on the classic hook inputs, so the grid shows what the
+// Effort arrives on each model request (turn.step), so the grid shows what the
 // last one said. (The permission mode is the engine's own hint line, just below.)
 let effort: string | undefined
-const see = (e: { effort?: { level: string } }): void => {
-  effort = e.effort?.level ?? effort
-}
 
 // A command's output, or null when it failed or is not installed. In the C locale, so git's
 // words (`insertions`) read the same everywhere.
@@ -673,13 +670,15 @@ export const register: Register = on => {
     refreshStatus($)
     return result
   })
-  on('classic.SessionStart', ($, e, next) => (see(e), refreshStatus($), next(e))).catch(($, e, next) => next(e))
-  on('classic.UserPromptSubmit', ($, e, next) => (see(e), refreshStatus($), next(e))).catch(($, e, next) => next(e))
-  // Effort holds for a turn; the prompt's hook may not carry it, so a call's says it before the turn ends.
-  on('classic.PostToolUse', ($, e, next) => (see(e), next(e))).catch(($, e, next) => next(e))
-  on('classic.Stop', ($, e, next) => (see(e), refreshStatus($), next(e))).catch(($, e, next) => next(e))
-  // /model, the picker or a fallback: the model chip follows at once, not at the next tick.
-  on('classic.PostModelSwitch', ($, e, next) => (refreshStatus($), next(e))).catch(($, e, next) => next(e))
+  // Not the classic hooks: a Team org's built-in cc-plugin-sec-default runs first and sends
+  // classic.* past every installed plugin. Each request says its effort; the tick catches a model switch.
+  on('turn.step', async function* ($, e, next) {
+    if (!e.agentId && typeof e.effort === 'string' && e.effort !== effort) {
+      effort = e.effort
+      refreshStatus($)
+    }
+    return yield* next(e)
+  })
 
   // ── compact mode: what the popup says, and the task list it splits into sections ──
   on('tool.call', async ($, e, next) => {

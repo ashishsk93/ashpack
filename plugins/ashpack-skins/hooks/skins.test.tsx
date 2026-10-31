@@ -457,7 +457,7 @@ test('charts: mermaid fences read into flowcharts, sequences, pies and xy charts
   expect(pieText).toContain('■ b   75%  3')
 })
 
-test('a closed ```mermaid fence draws as a chart while charts are on, and Claude is told so', async ($, on) => {
+test('a closed ```mermaid fence draws as a chart while charts are on, and Claude is told so once', async ($, on) => {
   mock.store(on)
   mock.clock(on, { now: 0 })
   on('config.list', () => ({ value: [{ key: 'theme', value: 'dark' }] }) as never)
@@ -465,7 +465,9 @@ test('a closed ```mermaid fence draws as a chart while charts are on, and Claude
     const { Text } = $.ui.resolve(e)
     return <Text>engine-reply</Text>
   })
-  on('prompt.compose', () => ({ sections: [{ id: 'intro', text: 'You are Claude.', scope: 'shared' }] }) as never)
+  let surfaces: string[] = []
+  on('session.surfaces', () => ({ value: surfaces }) as never)
+  on('prompt.submit', ($, e) => e as never)
   await $.command.run({ command: 'skin', args: 'nord' } as never)
   const fence = ['Here:', '```mermaid', FLOW, '```'].join('\n')
   const draw = async (surface: 'terminal' | 'desktop', text: string) => {
@@ -490,15 +492,18 @@ test('a closed ```mermaid fence draws as a chart while charts are on, and Claude
     expect(open).not.toContain('├─')
     expect(open).not.toContain('steps')
   }
-  const sections = async (surfaces: readonly string[]) => (await $.prompt.compose({ surfaces, model: 'claude-opus-5-5', promptModel: 'claude-opus-5-5', tools: [], outputStyle: null, traits: [] } as never)).sections.map(s => s.id)
-  expect(await sections(['terminal'])).toEqual(['intro', 'ashpack-skins:charts'])
-  expect(await sections([])).toEqual(['intro']) // headless: nothing draws a chart
-
+  const noted = async (on: string[]) => {
+    surfaces = on
+    const r = (await $.prompt.submit({ text: 'hi', wait: false, origin: {} } as never)) as { context?: readonly string[] }
+    return (r.context ?? []).some(c => c.startsWith('Charts:'))
+  }
+  expect(await noted([])).toBe(false) // headless: nothing draws a chart
   expect((await $.command.run({ command: 'skin', args: 'charts off' } as never)).text).toContain('Charts off')
   expect(await draw('terminal', fence)).not.toContain('├─')
-  expect(await sections(['terminal'])).toEqual(['intro'])
+  expect(await noted(['terminal'])).toBe(false)
   expect((await $.command.run({ command: 'skin', args: 'charts' } as never)).text).toContain('Charts on')
-  expect(await sections(['desktop'])).toEqual(['intro', 'ashpack-skins:charts'])
+  expect(await noted(['desktop'])).toBe(true)
+  expect(await noted(['desktop'])).toBe(false) // once per conversation
 })
 
 test('markdown extras: alerts, task lists and diff fences', () => {

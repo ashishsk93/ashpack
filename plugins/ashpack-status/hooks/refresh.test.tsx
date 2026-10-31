@@ -23,8 +23,6 @@ function world(on: On, prints: Record<string, string | null>, wait: (words: stri
   on('session.measure', () => ({ changed: [] }) as never)
   on('turn.start', ($, e) => e as never)
   on('turn.complete', () => ({ text: '' }) as never)
-  on('classic.Stop', () => ({}) as never)
-  on('classic.UserPromptSubmit', () => ({}) as never)
   on('session.model', () => ({ value: 'claude-opus-5-5' }))
   on('session.cwd', () => ({ value: '/repo' }))
   on('session.usage', () => ({ value: { startedAt: T0, context: { window: 1, tokens: 1, percent: 30 }, rateLimits: [] } }) as never)
@@ -67,8 +65,8 @@ test('a burst of refresh asks folds into one more load; an unchanged refresh wri
   expect(ran).toEqual(['git status'])
   await $.turn.complete({ answer: '', durationMs: 1, isAborted: false, turnId: 't1', reason: 'answer' } as never)
   await $.session.measure({} as never)
-  await $.classic.Stop({ stop_hook_active: false } as never)
-  await $.classic.UserPromptSubmit({ prompt: 'next' } as never)
+  await $.session.measure({} as never)
+  await $.session.measure({} as never)
   isHeld = false
   release()
   await clock.advance(0)
@@ -76,7 +74,7 @@ test('a burst of refresh asks folds into one more load; an unchanged refresh wri
   expect(set.status).toBe(1)
 
   // Nothing changed: the next refresh runs git and writes nothing.
-  await $.classic.Stop({ stop_hook_active: false } as never)
+  await $.session.measure({} as never)
   await clock.advance(0)
   expect(ran).toHaveLength(3)
   expect(set.status).toBe(1)
@@ -137,18 +135,18 @@ test('the repo chips: GitHub at most every 2 minutes and at once on a new branch
   // A new branch asks at once. No stash line: this git (2.47) prints one when there are any,
   // so there are none; its version is asked once.
   prints['git status'] = '# branch.head feature\n'
-  await $.classic.Stop({ stop_hook_active: false } as never)
+  await $.session.measure({} as never)
   await clock.advance(0)
   expect(times('gh pr')).toBe(3)
   expect(await band()).not.toContain('stash')
-  await $.classic.Stop({ stop_hook_active: false } as never)
+  await $.session.measure({} as never)
   await clock.advance(0)
   expect(times('git version')).toBe(1)
   expect(times('git stash')).toBe(0)
   // No `gh` (or no PR for the branch): the chip says so.
   prints['git status'] = '# branch.head (detached)\n'
   prints['gh pr'] = null
-  await $.classic.Stop({ stop_hook_active: false } as never)
+  await $.session.measure({} as never)
   await clock.advance(0)
   text = await band()
   expect(text).toContain('⎇ detached')
