@@ -568,6 +568,21 @@ async function openPage($: EngineInterface, page: 'status' | 'activity'): Promis
   await $.ui.open({ id, title, focus: true, closeOnEscape: true, columns: PANE_COLUMNS })
 }
 
+// The switches and chip picks, from the store into state: at session.start, and again after
+// a /clear or a resume, which reset $.state to its defaults.
+async function load($: EngineInterface): Promise<void> {
+  const [storedCompact, storedStatus, storedChips, storedOrder] = await Promise.all([$.store.get(COMPACT_KEY), $.store.get(STATUS_KEY), $.store.get(CHIPS_KEY), $.store.get(ORDER_KEY)])
+  await update($, compact, () => storedCompact === true)
+  await update($, statusOn, () => storedStatus !== false)
+  // A chip added since the pick was stored takes its default; both are stored again so it
+  // counts as seen from now on.
+  const hidden = hiddenChipsOf(storedChips, storedOrder)
+  const order = chipOrder(storedOrder)
+  await update($, hiddenChips, () => hidden)
+  await update($, orderedChips, () => order)
+  await Promise.all([$.store.set(CHIPS_KEY, hidden), $.store.set(ORDER_KEY, order)])
+}
+
 // A switch or a pick that survives sessions: the atom's write (spelled out at the call, so
 // the engine can list it), then the store.
 async function save<T>($: EngineInterface, key: string, write: Promise<T>): Promise<T> {
@@ -606,16 +621,7 @@ function emptyRow($: EngineInterface, e: RenderInput<'ToolUse'> | RenderInput<'T
 export const register: Register = on => {
   // ── shared events ──
   on('session.start', async ($, e, next) => {
-    const [storedCompact, storedStatus, storedChips, storedOrder] = await Promise.all([$.store.get(COMPACT_KEY), $.store.get(STATUS_KEY), $.store.get(CHIPS_KEY), $.store.get(ORDER_KEY)])
-    await update($, compact, () => storedCompact === true)
-    await update($, statusOn, () => storedStatus !== false)
-    // A chip added since the pick was stored takes its default; both are stored again so it
-    // counts as seen from now on.
-    const hidden = hiddenChipsOf(storedChips, storedOrder)
-    const order = chipOrder(storedOrder)
-    await update($, hiddenChips, () => hidden)
-    await update($, orderedChips, () => order)
-    await Promise.all([$.store.set(CHIPS_KEY, hidden), $.store.set(ORDER_KEY, order)])
+    await load($)
     await resetActivity($)
     $.ui.status(undefined) // 0.1.0 pinned a plain-text line; the rows replace it
     await $.command.register({
@@ -656,8 +662,12 @@ export const register: Register = on => {
     return next(e)
   })
 
-  on('session.end', async ($, e, next) => {
-    if (e.reason === 'clear' || e.reason === 'resume') await clearHistory($)
+  // /clear and /resume reset $.state to its defaults and skip session.start: the stored
+  // switches and chips load again once the reset is done, and the chips refetch.
+  on('session.end', ($, e, next) => {
+    if (e.reason === 'clear' || e.reason === 'resume') {
+      $.clock.after(0, () => void Promise.all([load($), clearHistory($)]).then(() => refreshStatus($), err => $.ui.log(`ashpack-status: ${String(err)}`, { to: 'debug' })))
+    }
     return next(e)
   }).catch(($, e, next) => next(e))
 

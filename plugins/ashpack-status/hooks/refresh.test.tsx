@@ -80,6 +80,26 @@ test('a burst of refresh asks folds into one more load; an unchanged refresh wri
   expect(set.status).toBe(1)
 })
 
+test('a /clear keeps the stored chip picks: they load again, and the chips refetch', async ($, on) => {
+  mock.store(on, { ...ALL_CHIPS, hiddenChips: ['model'] })
+  const clock = mock.clock(on, { now: T0 })
+  const ran = world(on, { 'git status': '# branch.head main\n' })
+  on('session.end', ($, e) => ({ sessionId: e.sessionId }) as never)
+  on('ui.render', { component: 'AbovePrompt' }, ($, e) => {
+    const { Box } = $.ui.resolve(e)
+    return <Box />
+  })
+  // /clear resets $.state and fires no session.start: only session.end says so.
+  await $.session.end({ reason: 'clear', sessionId: 's1', resume: {} } as never)
+  await clock.advance(0)
+  expect(ran).toContain('git status')
+  const mounted = await $.ui.mount({ plugin: 'ashpack-status', surface: 'terminal', component: 'AbovePrompt', viewport: MAIN, props: { ...(BAND as object), isWorking: false } as never })
+  const text = flatten(await mounted.drawn())
+  await mounted.unmount()
+  expect(text).toContain('main')
+  expect(text).not.toContain('Opus')
+})
+
 test('git runs only while a chip shows the repo', async ($, on) => {
   mock.store(on, { hiddenChips: ['branch', 'tree', 'lines', 'commit', 'pr'] })
   const clock = mock.clock(on, { now: T0 })

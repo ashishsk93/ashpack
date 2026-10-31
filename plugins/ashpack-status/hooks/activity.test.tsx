@@ -243,7 +243,7 @@ test('a fault in the Activity page costs the drawer nothing', async ($, on) => {
 
 test('a turn\'s end: a subagent\'s keeps the popup; an interrupt and a refusal say so; 30 turns kept; a resume starts over', async ($, on) => {
   mock.store(on)
-  mock.clock(on, { now: T0 })
+  const clock = mock.clock(on, { now: T0 })
   session(on)
   await $.command.run({ command: 'ashstatus', args: 'compact' } as never)
   await $.turn.start({ text: 'one', turnId: 't1' } as never)
@@ -277,6 +277,7 @@ test('a turn\'s end: a subagent\'s keeps the popup; an interrupt and a refusal s
 
   // Another session takes this one's place (a resume): the page starts over.
   await $.session.end({ reason: 'resume', sessionId: 's1', resume: {} } as never)
+  await clock.advance(0) // the reload waits for the reset
   text = flatten(await term.drawn())
   expect(text).toContain('Ready when you are')
   expect(text).toContain('TURNS0')

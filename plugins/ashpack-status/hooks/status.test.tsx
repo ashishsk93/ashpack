@@ -733,6 +733,7 @@ test('the Activity page keeps each turn: the one in view, its calls, the session
 
   // A /clear starts the page over.
   await $.session.end({ reason: 'clear', sessionId: 's1', resume: {} } as never)
+  await clock.advance(0) // the reload waits for the reset
   const cleared = flatten(await own.drawn())
   expect(cleared).toContain('Ready when you are')
   expect(cleared).not.toContain('TURN 2')
